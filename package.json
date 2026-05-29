@@ -1,0 +1,41 @@
+{
+  "name": "@agledger/verify-core",
+  "version": "0.1.3",
+  "description": "Shared offline verification core for AGLedger audit chains — COSE_Sign1 (RFC 9052) decode/verify, Ed25519, hash-chain walk, Merkle proofs, and the canonical failure taxonomy. One dependency (cborg); no network. The single source of truth the SDK, CLI, MCP server, and @agledger/verify all build on.",
+  "license": "SEE LICENSE IN LICENSE",
+  "type": "module",
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "LICENSE",
+    "README.md"
+  ],
+  "scripts": {
+    "prebuild": "rm -rf dist",
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf dist *.tsbuildinfo",
+    "lint": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "cborg": "5.1.1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/agledger-ai/agledger-agents",
+    "directory": "packages/verify-core"
+  },
+  "homepage": "https://agledger.ai",
+  "author": "AGLedger LLC"
+}
