@@ -4,6 +4,16 @@ All notable changes to `@agledger/verify-core` will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.1.7] - 2026-06-04
+
+No functional change to the verifier. Release-pipeline hardening (canary-validated):
+
+### Changed
+
+- **`actions/attest`** replaces the deprecated `actions/attest-sbom` for the signed CycloneDX SBOM attestation (predicate-type `https://cyclonedx.org/bom`).
+- **publint + attw publish gate.** `npm run lint:pkg` (`publint --strict` + `attw --pack`) now runs in the release workflow and via `prepublishOnly`, so a broken `exports`/`types` map can't publish.
+- **Dependabot** added (`.github/dependabot.yml`): weekly grouped github-actions + npm bumps.
+
 ## [0.1.6] - 2026-06-04
 
 No functional change to the verifier. Release-pipeline hardening, validated end-to-end by this release:
