@@ -1,6 +1,6 @@
 {
   "name": "@agledger/verify-core",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "description": "Shared offline verification core for AGLedger audit chains — COSE_Sign1 (RFC 9052) decode/verify, Ed25519, hash-chain walk, Merkle proofs, and the canonical failure taxonomy. One dependency (cborg); no network. The single source of truth the SDK, CLI, MCP server, and @agledger/verify all build on.",
   "license": "SEE LICENSE IN LICENSE",
   "type": "module",
@@ -26,13 +26,17 @@
     "typecheck": "tsc --noEmit",
     "clean": "rm -rf dist *.tsbuildinfo",
     "lint": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "lint:pkg": "publint --strict && attw --pack . --ignore-rules cjs-resolves-to-esm no-resolution",
+    "prepublishOnly": "npm run build && npm run lint:pkg"
   },
   "dependencies": {
     "cborg": "5.1.1"
   },
   "devDependencies": {
+    "@arethetypeswrong/cli": "^0.18.3",
     "@types/node": "^24.0.0",
+    "publint": "^0.3.21",
     "typescript": "^6.0.0",
     "vitest": "^4.1.0"
   },
