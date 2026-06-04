@@ -4,6 +4,15 @@ All notable changes to `@agledger/verify-core` will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.1.8] - 2026-06-04
+
+No functional change to the verifier. Documentation accuracy and test-coverage hardening.
+
+### Changed
+
+- **README accuracy.** Cross-repo links (`@agledger/cli`, `@agledger/mcp-server`, `@agledger/verify`) now use absolute `https://github.com/agledger-ai/<repo>` URLs instead of relative paths that 404 on npm and standalone GitHub. The failure-taxonomy example cites a real code (`CHAIN_LINK_BROKEN`) instead of the non-existent `CHAIN_PREVIOUS_HASH_MISMATCH`. Added an "Out-of-band keys" section documenting both accepted `publicKeys` shapes — the `Record<keyId, base64SpkiDer>` map and the `OutOfBandKeyEntry[]` array form returned by `client.verificationKeys.list().data`.
+- **Broadened no-network test scan.** The offline-verifier network-import check (`fetch`, `node:http`/`https`/`net`/`tls`/`dgram`/`dns`) now covers the `tests/` directory in addition to `src/`, so an accidental network call in a test is caught.
+
 ## [0.1.7] - 2026-06-04
 
 No functional change to the verifier. Release-pipeline hardening (canary-validated):

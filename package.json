@@ -1,6 +1,6 @@
 {
   "name": "@agledger/verify-core",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "description": "Shared offline verification core for AGLedger audit chains — COSE_Sign1 (RFC 9052) decode/verify, Ed25519, hash-chain walk, Merkle proofs, and the canonical failure taxonomy. One dependency (cborg); no network. The single source of truth the SDK, CLI, MCP server, and @agledger/verify all build on.",
   "license": "SEE LICENSE IN LICENSE",
   "type": "module",
