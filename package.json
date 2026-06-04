@@ -31,10 +31,17 @@
   "dependencies": {
     "cborg": "5.1.1"
   },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "^6.0.0",
+    "vitest": "^4.1.0"
+  },
   "repository": {
     "type": "git",
-    "url": "https://github.com/agledger-ai/agledger-agents",
-    "directory": "packages/verify-core"
+    "url": "git+https://github.com/agledger-ai/verify-core.git"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "homepage": "https://agledger.ai",
   "author": "AGLedger LLC"

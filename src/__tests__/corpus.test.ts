@@ -21,8 +21,9 @@ import type { FailureCode } from '../failures.js';
  */
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-// packages/verify-core/src/__tests__ -> repo root is four levels up.
-const CONFORMANCE_DIR = join(HERE, '..', '..', '..', '..', 'testdata', 'conformance');
+// src/__tests__ -> repo root is two levels up (corpus vendored at repo root;
+// agledger-api owns generation, this repo pins the export-kind slice).
+const CONFORMANCE_DIR = join(HERE, '..', '..', 'testdata', 'conformance');
 const MANIFEST_PATH = join(CONFORMANCE_DIR, 'manifest-export.json');
 
 interface SignatureCoverageAssertion {

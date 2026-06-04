@@ -15,7 +15,7 @@ import type { RecordAuditExportInput } from '../audit-export.js';
  */
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const EXPORT_DIR = join(HERE, '..', '..', '..', '..', 'testdata', 'conformance', 'export');
+const EXPORT_DIR = join(HERE, '..', '..', 'testdata', 'conformance', 'export');
 
 function loadValid(): RecordAuditExportInput {
   return JSON.parse(readFileSync(join(EXPORT_DIR, 'valid.json'), 'utf8')) as RecordAuditExportInput;
