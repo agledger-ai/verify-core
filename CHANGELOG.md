@@ -4,6 +4,16 @@ All notable changes to `@agledger/verify-core` will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.1.6] - 2026-06-04
+
+No functional change to the verifier. Release-pipeline hardening, validated end-to-end by this release:
+
+### Changed
+
+- **Signed CycloneDX SBOM attestation.** The per-release SBOM is now published as a signed, verifiable attestation (`actions/attest-sbom`) rather than only an ephemeral build artifact.
+- **Explicit `npm publish --provenance`** (fail-closed) instead of relying on npm's auto-attach default.
+- **Concurrency guard** on the release workflow so two tags pushed in quick succession can't race into a double-publish.
+
 ## [0.1.5] - 2026-06-04
 
 Republish with provenance (CI diagnostic — isolating an OIDC trusted-publishing issue affecting the sibling repos). No functional change.
