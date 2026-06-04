@@ -4,6 +4,10 @@ All notable changes to `@agledger/verify-core` will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.1.5] - 2026-06-04
+
+Republish with provenance (CI diagnostic — isolating an OIDC trusted-publishing issue affecting the sibling repos). No functional change.
+
 ## [0.1.4] - 2026-06-03
 
 No functional change to the verifier. This is the first release published from CI with **build provenance**.
