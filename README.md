@@ -7,9 +7,11 @@ signature over each `Sig_structure` — with no engine, no database, and no
 network.
 
 This is the single body of logic that underpins the SDK `/verify` subpath
-(`@agledger/sdk/verify`), the [`@agledger/cli`](../cli) `verify` command, the
-[`@agledger/mcp-server`](../mcp-server) `agledger_verify` tool, and the
-full-vault [`@agledger/verify`](../verify) auditor package. Each of those
+(`@agledger/sdk/verify`), the [`@agledger/cli`](https://github.com/agledger-ai/cli)
+`verify` command, the
+[`@agledger/mcp-server`](https://github.com/agledger-ai/mcp-server) `agledger_verify`
+tool, and the full-vault [`@agledger/verify`](https://github.com/agledger-ai/verify)
+auditor package. Each of those
 consumes this core rather than carrying its own copy, so a chain that passes in
 one surface passes identically in all of them.
 
@@ -22,7 +24,7 @@ CBOR decoding.
 import { verifyAuditExport } from '@agledger/verify-core';
 
 const result = verifyAuditExport(exportDocument, {
-  publicKeys,             // optional out-of-band keys, keyed by kid
+  publicKeys,             // optional out-of-band keys (see "Out-of-band keys" below)
   requireOutOfBandKeys: true, // optional: refuse the export's embedded keys
 });
 
@@ -44,11 +46,24 @@ if (!result.valid) {
 - **Ed25519 signature** — over the reconstructed `Sig_structure`, against the
   matched verification key.
 
+## Out-of-band keys
+
+`options.publicKeys` accepts either of two shapes:
+
+- a **`Record<keyId, base64SpkiDer>`** map (compact, keyed by key id), or
+- an **`OutOfBandKeyEntry[]`** array — the natural shape returned by
+  `client.verificationKeys.list().data` and SCITT COSE_KeySet listings, where
+  each entry is `{ keyId, publicKey, activatedAt?, retiredAt? }` (`publicKey`
+  is SPKI DER base64).
+
+Both are normalized at the boundary; anything else throws `TypeError`
+(fail-closed — the verifier never silently falls back to embedded keys).
+
 ## Canonical failure taxonomy
 
 Every failure is a canonical SCREAMING_SNAKE `FailureCode`. Importing the
 taxonomy from one place keeps every verifier reporting the same code for the
-same fault — so an auditor reads `CHAIN_PREVIOUS_HASH_MISMATCH` whether the
+same fault — so an auditor reads `CHAIN_LINK_BROKEN` whether the
 chain was checked by the SDK, the CLI, the MCP tool, or `@agledger/verify`.
 
 ## Key provenance

@@ -15,6 +15,13 @@ const ROOT = join(import.meta.dirname, '..');
 /** Source directories to scan (relative to repo root). */
 const SOURCE_DIRS = ['src'];
 
+/**
+ * Directories scanned for network access. Broader than SOURCE_DIRS: a stray
+ * `fetch`/`node:http` in a TEST is just as fatal to the no-network guarantee as
+ * one in `src` — a test that phones home defeats the offline claim it asserts.
+ */
+const NETWORK_SCAN_DIRS = ['src', 'tests'];
+
 /** Collect all source files recursively. */
 function collectFiles(dir: string, exts: string[]): string[] {
   const results: string[] = [];
@@ -116,7 +123,7 @@ describe('offline verifier makes no network access', () => {
 
   it('imports no http/net modules and calls no fetch', () => {
     const violations: string[] = [];
-    for (const dir of SOURCE_DIRS) {
+    for (const dir of NETWORK_SCAN_DIRS) {
       for (const file of collectFiles(join(ROOT, dir), ['.ts'])) {
         const lines = readFileSync(file, 'utf8').split('\n');
         for (let i = 0; i < lines.length; i++) {
