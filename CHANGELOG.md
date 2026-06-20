@@ -4,7 +4,11 @@ All notable changes to `@agledger/verify-core` will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
-## [0.1.9] - 2026-06-10
+## [1.0.0] - 2026-06-20
+
+### Changed
+
+- **1.0.0 GA.** Version promoted to 1.0.0 to align with the AGLedger API v1.0.0 GA and the published SDK/CLI line (`@agledger/sdk`, `@agledger/cli` at 1.0.x). No code, API-surface, or wire-format changes from 0.1.9 — the COSE_Sign1 / in-toto verification core, the canonical `FailureCode` set, and all exports are byte-for-byte the same. This is a stability signal: the offline verifier contract is now considered stable and will follow SemVer from here.
 
 ### Changed
 
