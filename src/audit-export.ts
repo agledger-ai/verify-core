@@ -76,6 +76,16 @@ export interface RecordAuditExportInput {
     signingKeyWindows?: Record<string, SigningKeyWindow>;
   };
   entries: AuditExportEntryInput[];
+  /**
+   * Self-describing verification guidance the engine ships in the export (api#769).
+   * `unsignedFields` lists per-entry fields that are UNSIGNED display projections
+   * (e.g. `actorDisplayName`) resolved at export time, not covered by the COSE_Sign1
+   * signature. A PASS does NOT vouch for these labels — signed attribution is the
+   * `actorOwnerId`/`actorId` UUID. Surfaced on the result so a verdict can say so.
+   */
+  verificationGuide?: {
+    unsignedFields?: string[];
+  };
 }
 
 /**
@@ -157,6 +167,14 @@ export interface VerifyExportResult {
    * that produced the export — supply out-of-band keys for an independent audit.
    */
   keyProvenance: { outOfBand: number; embedded: number };
+  /**
+   * Per-entry fields the export self-describes as UNSIGNED display projections
+   * (from `verificationGuide.unsignedFields`, api#769) — e.g. `actorDisplayName`.
+   * A valid signature does NOT cover these; signed attribution is the
+   * `actorOwnerId`/`actorId` UUID. Empty when the export carries no such guidance.
+   * A caller surfacing a PASS should warn that these labels are not vouched for.
+   */
+  unsignedProjectionFields: string[];
 }
 
 const SUPPORTED_FORMAT_VERSION = '2.0';
@@ -247,6 +265,7 @@ export function verifyAuditExport(
     signatureCoverage: chain.signatureCoverage,
     optionalChecks: chain.optionalChecks,
     keyProvenance: chain.keyProvenance,
+    unsignedProjectionFields: exportData.verificationGuide?.unsignedFields ?? [],
   };
 }
 
@@ -265,6 +284,7 @@ function earlyFailure(recordId: string, totalEntries: number, detail: string): V
       key_temporal: 'skipped_no_input',
     },
     keyProvenance: { outOfBand: 0, embedded: 0 },
+    unsignedProjectionFields: [],
   };
 }
 

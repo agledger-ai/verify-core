@@ -39,6 +39,28 @@ describe('export-path optional checks (Pass-2 wire parity)', () => {
     expect(result.optionalChecks.payload_binding).toBe('applied');
   });
 
+  it('surfaces verificationGuide.unsignedFields as unsignedProjectionFields (api#769)', () => {
+    const base = loadValid();
+    // Default: a corpus export without the guidance reports an empty list.
+    expect(verifyAuditExport(base).unsignedProjectionFields).toEqual([]);
+
+    // When the engine ships the guidance, the verifier echoes it so a caller can
+    // warn that a PASS doesn't vouch for the unsigned display labels.
+    const withGuide: RecordAuditExportInput = {
+      ...base,
+      verificationGuide: {
+        unsignedFields: ['actorDisplayName', 'actorOwnerType', 'humanReadableLabel'],
+      },
+    };
+    const result = verifyAuditExport(withGuide);
+    expect(result.valid).toBe(true);
+    expect(result.unsignedProjectionFields).toEqual([
+      'actorDisplayName',
+      'actorOwnerType',
+      'humanReadableLabel',
+    ]);
+  });
+
   it('still applies the checks when out-of-band keys override the embedded set', () => {
     // resolveKeys must carry the signingKeyWindows window onto the out-of-band key
     // override too, otherwise key_temporal silently degrades to skipped_no_input

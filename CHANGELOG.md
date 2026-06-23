@@ -4,6 +4,12 @@ All notable changes to `@agledger/verify-core` will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.0.1] - 2026-06-22
+
+### Added
+
+- **`VerifyExportResult.unsignedProjectionFields`** (cross-repo #96 / api#769) — surfaces the export's self-described `verificationGuide.unsignedFields`: per-entry fields that are UNSIGNED display projections (e.g. `actorDisplayName`, `actorOwnerType`, `humanReadableLabel`) resolved at export time and NOT covered by the COSE_Sign1 signature. Empty when the export carries no such guidance. Signed attribution remains the `actorOwnerId`/`actorId` UUID. `RecordAuditExportInput` gains the optional `verificationGuide` field it's read from. Purely additive; no change to chain verification, signing, or the wire format.
+
 ## [1.0.0] - 2026-06-20
 
 ### Changed
