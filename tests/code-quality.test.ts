@@ -42,6 +42,24 @@ function allTsFiles(): string[] {
   return SOURCE_DIRS.flatMap(d => collectFiles(join(ROOT, d), ['.ts']));
 }
 
+/** Collect all Markdown files from the repo root, skipping vendored/build dirs. */
+function collectMarkdown(dir: string): string[] {
+  const results: string[] = [];
+  for (const entry of readdirSync(dir)) {
+    if (entry === 'node_modules' || entry === 'dist' || entry === 'build' || entry === '.git') {
+      continue;
+    }
+    const full = join(dir, entry);
+    const stat = statSync(full);
+    if (stat.isDirectory()) {
+      results.push(...collectMarkdown(full));
+    } else if (extname(full) === '.md' && entry !== 'CHANGELOG.md') {
+      results.push(full);
+    }
+  }
+  return results;
+}
+
 function relPath(file: string): string {
   return relative(ROOT, file);
 }
@@ -109,6 +127,26 @@ describe('publishable package cleans dist before building', () => {
       cleansDist(scripts.prebuild) || cleansDist(scripts.build),
       'build does not wipe dist/ first (add "prebuild": "rm -rf dist")',
     ).toBe(true);
+  });
+});
+
+describe('no em-dash overuse in markdown', () => {
+  // Dense em-dash usage reads as machine-generated. Cap each shipped Markdown
+  // file at a natural human level so the docs don't drift back toward that tell.
+  const MAX_EM_DASHES = 4;
+
+  it(`should have at most ${MAX_EM_DASHES} em-dashes per markdown file`, () => {
+    const violations: string[] = [];
+    for (const file of collectMarkdown(ROOT)) {
+      const count = (readFileSync(file, 'utf8').match(/—/g) ?? []).length;
+      if (count > MAX_EM_DASHES) {
+        violations.push(`${relPath(file)}: ${count} em-dashes (max ${MAX_EM_DASHES})`);
+      }
+    }
+    expect(
+      violations,
+      `Em-dash overuse in markdown:\n${violations.join('\n')}`,
+    ).toHaveLength(0);
   });
 });
 

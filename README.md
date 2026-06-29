@@ -3,7 +3,7 @@
 The shared offline verification core for AGLedger audit chains. Decodes
 canonical **COSE_Sign1** envelopes (RFC 9052, tag 18, EdDSA) over in-toto v1
 Statement payloads, walks the per-record hash chain, and verifies the Ed25519
-signature over each `Sig_structure` — with no engine, no database, and no
+signature over each `Sig_structure`, with no engine, no database, and no
 network.
 
 This is the single body of logic that underpins the SDK `/verify` subpath
@@ -37,13 +37,13 @@ if (!result.valid) {
 
 ## What it verifies
 
-- **`chainPosition` monotonicity** — gap-free, in order.
-- **`payload_hash` = sha256(cose_sign1)** — the visible row hash binds the
+- **`chainPosition` monotonicity**: gap-free, in order.
+- **`payload_hash` = sha256(cose_sign1)**: the visible row hash binds the
   signed envelope bytes.
-- **`previous_hash` linkage** — each entry chains to its predecessor.
-- **Signed chain-claim cross-check** — the chain position and linkage claimed in
+- **`previous_hash` linkage**: each entry chains to its predecessor.
+- **Signed chain-claim cross-check**: the chain position and linkage claimed in
   the COSE protected header match the row columns.
-- **Ed25519 signature** — over the reconstructed `Sig_structure`, against the
+- **Ed25519 signature**: over the reconstructed `Sig_structure`, against the
   matched verification key.
 
 ## Out-of-band keys
@@ -51,7 +51,7 @@ if (!result.valid) {
 `options.publicKeys` accepts either of two shapes:
 
 - a **`Record<keyId, base64SpkiDer>`** map (compact, keyed by key id), or
-- an **`OutOfBandKeyEntry[]`** array — the natural shape returned by
+- an **`OutOfBandKeyEntry[]`** array, the natural shape returned by
   `client.verificationKeys.list().data` and SCITT COSE_KeySet listings, where
   each entry is `{ keyId, publicKey, activatedAt?, retiredAt? }` (`publicKey`
   is SPKI DER base64).
