@@ -57,13 +57,13 @@ if (!result.valid) {
   is SPKI DER base64).
 
 Both are normalized at the boundary; anything else throws `TypeError`
-(fail-closed — the verifier never silently falls back to embedded keys).
+(fail-closed: the verifier never silently falls back to embedded keys).
 
 ## Canonical failure taxonomy
 
 Every failure is a canonical SCREAMING_SNAKE `FailureCode`. Importing the
 taxonomy from one place keeps every verifier reporting the same code for the
-same fault — so an auditor reads `CHAIN_LINK_BROKEN` whether the
+same fault, so an auditor reads `CHAIN_LINK_BROKEN` whether the
 chain was checked by the SDK, the CLI, the MCP tool, or `@agledger/verify`.
 
 ## Key provenance
