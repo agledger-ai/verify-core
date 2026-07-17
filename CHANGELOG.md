@@ -4,6 +4,15 @@ All notable changes to `@agledger/verify-core` will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.0.3] - 2026-07-16
+
+Tooling only. No verification, signing, or wire-format change; the shipped dist is behavior-identical.
+
+### Changed
+
+- Upgraded the TypeScript devDependency to `^7.0.2`. Build, typecheck, tests, and publint/attw all pass under 7.0.2.
+- Refreshed the lockfile to in-range latest dev tooling. `cborg` stays pinned at 5.1.1 for reproducibility.
+
 ## [1.0.2] - 2026-06-29
 
 ### Changed
