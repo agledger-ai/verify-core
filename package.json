@@ -37,7 +37,7 @@
     "@arethetypeswrong/cli": "^0.18.3",
     "@types/node": "^24.0.0",
     "publint": "^0.3.21",
-    "typescript": "^6.0.0",
+    "typescript": "^7.0.2",
     "vitest": "^4.1.0"
   },
   "repository": {
