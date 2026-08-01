@@ -18,3 +18,23 @@ updates:
     groups:
       npm-minor-patch:
         update-types: ["minor", "patch"]
+    ignore:
+      # @types/node tracks the runtime we ship to, not the newest Node. This
+      # package declares engines.node >=24, and typing against a newer
+      # @types/node lets tsc accept APIs that do not exist on the runtime
+      # customers actually run. Take the major when the fleet target moves off
+      # Node 24, not before.
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
+      # cborg is pinned EXACTLY on purpose. This is the offline verifier: it
+      # recomputes hashes over deterministically CBOR-encoded (RFC 8949 CDE)
+      # COSE_Sign1 envelopes, and an auditor re-running it years from now has to
+      # get byte-identical results, so the encoder must not drift underneath a
+      # verification that is meant to be reproducible. Routine version bumps are
+      # ignored; SECURITY updates still come through, which is the documented
+      # condition for revisiting the pin.
+      - dependency-name: "cborg"
+        update-types:
+          - "version-update:semver-major"
+          - "version-update:semver-minor"
+          - "version-update:semver-patch"
