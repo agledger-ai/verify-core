@@ -12,15 +12,24 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 24 is what we ship to (Active LTS, and what engines.node declares).
+        # 26 is Current and becomes LTS on 2026-10-28; testing it now means the
+        # migration is a non-event instead of a discovery made under a deadline.
+        # Leading on what we TEST costs a job. Leading on what we DECLARE would
+        # cost users, which is why engines.node and @types/node stay at 24.
+        node-version: [24, 26]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
-      - name: Use Node.js 24
+      - name: Use Node.js ${{ matrix.node-version }}
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: 24
+          node-version: ${{ matrix.node-version }}
           cache: 'npm'
 
       - name: Install dependencies
