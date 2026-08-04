@@ -9,6 +9,13 @@ updates:
     groups:
       actions:
         patterns: ["*"]
+  # cborg stays pinned EXACTLY in package.json so a given release of this
+  # verifier is byte-reproducible, but its updates are no longer ignored. The
+  # freeze was justified by "the deterministic encoder must not drift", and
+  # src/__tests__/encoder-version-invariance.test.ts now proves the stronger
+  # claim: the only thing this package encodes is a Sig_structure of one text
+  # string and three byte strings, which no cborg version has ever encoded
+  # differently. That test is the gate. Let dependabot propose, let CI decide.
   - package-ecosystem: "npm"
     directory: "/"
     schedule:
@@ -19,22 +26,11 @@ updates:
       npm-minor-patch:
         update-types: ["minor", "patch"]
     ignore:
-      # @types/node tracks the runtime we ship to, not the newest Node. This
+      # @types/node tracks the LTS runtime we ship to, not the newest Node. This
       # package declares engines.node >=24, and typing against a newer
       # @types/node lets tsc accept APIs that do not exist on the runtime
-      # customers actually run. Take the major when the fleet target moves off
-      # Node 24, not before.
+      # customers actually run. Node 24 (Krypton) is the current Active LTS;
+      # Node 26 goes LTS on 2026-10-28. Take the @types/node major once its
+      # matching Node line is LTS, not while it is still Current.
       - dependency-name: "@types/node"
         update-types: ["version-update:semver-major"]
-      # cborg is pinned EXACTLY on purpose. This is the offline verifier: it
-      # recomputes hashes over deterministically CBOR-encoded (RFC 8949 CDE)
-      # COSE_Sign1 envelopes, and an auditor re-running it years from now has to
-      # get byte-identical results, so the encoder must not drift underneath a
-      # verification that is meant to be reproducible. Routine version bumps are
-      # ignored; SECURITY updates still come through, which is the documented
-      # condition for revisiting the pin.
-      - dependency-name: "cborg"
-        update-types:
-          - "version-update:semver-major"
-          - "version-update:semver-minor"
-          - "version-update:semver-patch"
