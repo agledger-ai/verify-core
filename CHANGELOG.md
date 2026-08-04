@@ -4,6 +4,19 @@ All notable changes to `@agledger/verify-core` will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.0.4] - 2026-08-03
+
+Dependency and test only. No verification, signing, or wire-format change; verification output is byte-identical.
+
+### Changed
+
+- **`cborg` moved from 5.1.1 to 6.1.1**, still an exact pin. 5.1.1 predated the 5.1.4 fix that emits shortest-form floats under `rfc8949EncodeOptions` (RFC 8949 4.2.1), so the old pin was frozen on non-conformant float encoding rather than on conformant output. It also left this package on a different encoder than the engine that produces the envelopes it verifies (`agledger-api` runs `cborg` 5.1.8). Neither difference could change this package's output, for the reason the new test below asserts.
+- Dependabot no longer ignores `cborg` updates. The exact pin stays (a given release is byte-reproducible); the new invariance test is the gate on taking a new one.
+
+### Added
+
+- **`encoder-version-invariance` test.** Replays every COSE_Sign1 envelope in the conformance corpus, rebuilds the Sig_structure this package encodes, and asserts the encoded bytes contain no CBOR map and no major-type-7 item. Those are the only two constructs whose deterministic encoding has changed across cborg versions (float shortest-form in 5.1.4, major-type-7 map key ordering in 6.0.0). A second check holds the encode surface to its single call site. Together they enforce, rather than assert in a comment, why the encoder version is not load-bearing here.
+
 ## [1.0.3] - 2026-07-16
 
 Tooling only. No verification, signing, or wire-format change; the shipped dist is behavior-identical.
