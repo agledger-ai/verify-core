@@ -274,6 +274,18 @@ describe('registry algorithm declaration cross-check', () => {
   });
 });
 
+describe('empty-string signingKeyId is not the unsigned marker', () => {
+  it('fails CHAIN_SIGNATURE_MISSING_KEY instead of skipping the signature check', () => {
+    // Only null is the engine's unsigned-mode marker. A tampered row carrying
+    // signingKeyId:"" must not ride the null-key skip branch to a green chain.
+    const envelope = buildEnvelope({ alg: -8, position: 1, previousHash: null, signer: edSigner });
+    const result = verifyChain([toEntry(envelope, 1, null, '')], registry(edKey));
+    expect(result.valid).toBe(false);
+    expect(result.brokenAt?.code).toBe('CHAIN_SIGNATURE_MISSING_KEY');
+    expect(result.signatureCoverage.skipped).toBe(0);
+  });
+});
+
 describe('untagged COSE_Sign1 rejection (engine decoder parity)', () => {
   it('decodeCoseSign1 returns null for an untagged envelope', () => {
     const untagged = buildEnvelope({ alg: -8, position: 1, previousHash: null, signer: edSigner, untagged: true });

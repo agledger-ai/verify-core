@@ -4,6 +4,12 @@ All notable changes to `@agledger/verify-core` will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.1.1] - 2026-08-05
+
+### Fixed
+
+- **An empty-string `signingKeyId` is no longer treated as the unsigned-mode marker.** Only a true `null` is; any other value, including the `""` no engine emits, must resolve in the key registry and fails `CHAIN_SIGNATURE_MISSING_KEY`. Previously a truthiness shortcut let a tampered `signingKeyId: ""` row skip its signature check and count as `skipped` coverage. Same defect class as the harness-side fix in the 1.1.0 review pass, swept across every verification surface.
+
 ## [1.1.0] - 2026-08-05
 
 The verifier forward-compatibility floor: this release prepares every verification path for a future signing-algorithm change without emitting or accepting anything new itself. Legitimate Ed25519 chains verify byte-identically to 1.0.4. What changes is how non-Ed25519 and tampered inputs are classified, and all of those changes are fail-closed.
