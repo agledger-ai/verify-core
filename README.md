@@ -1,10 +1,10 @@
 # @agledger/verify-core
 
 The shared offline verification core for AGLedger audit chains. Decodes
-canonical **COSE_Sign1** envelopes (RFC 9052, tag 18, EdDSA) over in-toto v1
-Statement payloads, walks the per-record hash chain, and verifies the Ed25519
-signature over each `Sig_structure`, with no engine, no database, and no
-network.
+canonical **COSE_Sign1** envelopes (RFC 9052, tag 18) over in-toto v1
+Statement payloads, walks the per-record hash chain, and verifies the
+signature over each `Sig_structure` under the algorithm the verification key
+commits to (Ed25519 or ES256), with no engine, no database, and no network.
 
 This is the single body of logic that underpins the SDK `/verify` subpath
 (`@agledger/sdk/verify`), the [`@agledger/cli`](https://github.com/agledger-ai/cli)
@@ -43,8 +43,9 @@ if (!result.valid) {
 - **`previous_hash` linkage**: each entry chains to its predecessor.
 - **Signed chain-claim cross-check**: the chain position and linkage claimed in
   the COSE protected header match the row columns.
-- **Ed25519 signature**: over the reconstructed `Sig_structure`, against the
-  matched verification key.
+- **Envelope signature**: over the reconstructed `Sig_structure`, against the
+  matched verification key, under the algorithm its SPKI commits to (Ed25519
+  or ES256; anything else fails closed as `CHAIN_UNSUPPORTED_ALGORITHM`).
 
 ## Out-of-band keys
 

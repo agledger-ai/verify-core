@@ -4,6 +4,19 @@ All notable changes to `@agledger/verify-core` will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.2.0] - 2026-08-05
+
+Signing-agility wave 2: this build now verifies ES256 chains. Engines older than api R2 are unaffected; Ed25519 chains verify byte-identically to 1.1.1.
+
+### Added
+
+- **ES256 verification.** A verification key whose SPKI commits to P-256 now dispatches to ECDSA with SHA-256 over raw `r||s` signatures (`ieee-p1363`, the COSE wire encoding), matching what the engine emits behind its ES256 opt-in. Both the original `-7` (ES256) and the RFC 9864 fully-specified `-9` (ESP256) header code points are accepted. A DER-encoded ECDSA signature does not verify: the wire is raw `r||s` only. Dispatch still binds to the trusted key material, never the header, and every other algorithm in the table (ES384, ES512, ES256K) still fails closed as `'unsupported-key-algorithm'` / `CHAIN_UNSUPPORTED_ALGORITHM`.
+- **`verifySignatureBytes`.** The key-dispatched generalization of `verifyEd25519Bytes`: resolves the algorithm from the SPKI and verifies under it, returning `false` for anything the build cannot compute.
+
+### Changed
+
+- **Conformance corpus regenerated from engine 1.3.4 @ `ed3369ab`** (the api R2 signing-agility build) and re-pinned via `CORPUS-LOCK.json`. The export slice gains the ES256 wave: `valid-es256` (real ES256 engine output, must pass), `es256-signature-invalid`, and `es256-header-alg-mismatch` (a valid ES256 signature under an EdDSA header must read as `CHAIN_ALG_MISMATCH`, tamper class, not an upgrade notice).
+
 ## [1.1.1] - 2026-08-05
 
 ### Fixed
