@@ -71,12 +71,15 @@ export interface KeyAlgorithm {
  * fully-specified registrations are accepted where assigned, so a producer
  * moving from `-8` (EdDSA) to `-19` (Ed25519) does not read as tampering.
  */
+// Entries are frozen because resolveKeyAlgorithm returns them by reference:
+// a consumer mutating verifiable/digest/dsaEncoding would silently change
+// global dispatch for every subsequent verification in the process.
 const KEY_ALGORITHMS: Record<string, KeyAlgorithm> = {
-  ed25519: { name: 'Ed25519', coseAlgs: [-8, -19], signatureLength: 64, verifiable: true, nodeKeyType: 'ed25519', namedCurve: null, digest: null, dsaEncoding: null },
-  'ec:prime256v1': { name: 'ES256', coseAlgs: [-7, -9], signatureLength: 64, verifiable: true, nodeKeyType: 'ec', namedCurve: 'prime256v1', digest: 'sha256', dsaEncoding: 'ieee-p1363' },
-  'ec:secp384r1': { name: 'ES384', coseAlgs: [-35], signatureLength: 96, verifiable: false, nodeKeyType: 'ec', namedCurve: 'secp384r1', digest: null, dsaEncoding: null },
-  'ec:secp521r1': { name: 'ES512', coseAlgs: [-36], signatureLength: 132, verifiable: false, nodeKeyType: 'ec', namedCurve: 'secp521r1', digest: null, dsaEncoding: null },
-  'ec:secp256k1': { name: 'ES256K', coseAlgs: [-47], signatureLength: 64, verifiable: false, nodeKeyType: 'ec', namedCurve: 'secp256k1', digest: null, dsaEncoding: null },
+  ed25519: Object.freeze({ name: 'Ed25519', coseAlgs: Object.freeze([-8, -19]), signatureLength: 64, verifiable: true, nodeKeyType: 'ed25519', namedCurve: null, digest: null, dsaEncoding: null } as const),
+  'ec:prime256v1': Object.freeze({ name: 'ES256', coseAlgs: Object.freeze([-7, -9]), signatureLength: 64, verifiable: true, nodeKeyType: 'ec', namedCurve: 'prime256v1', digest: 'sha256', dsaEncoding: 'ieee-p1363' } as const),
+  'ec:secp384r1': Object.freeze({ name: 'ES384', coseAlgs: Object.freeze([-35]), signatureLength: 96, verifiable: false, nodeKeyType: 'ec', namedCurve: 'secp384r1', digest: null, dsaEncoding: null } as const),
+  'ec:secp521r1': Object.freeze({ name: 'ES512', coseAlgs: Object.freeze([-36]), signatureLength: 132, verifiable: false, nodeKeyType: 'ec', namedCurve: 'secp521r1', digest: null, dsaEncoding: null } as const),
+  'ec:secp256k1': Object.freeze({ name: 'ES256K', coseAlgs: Object.freeze([-47]), signatureLength: 64, verifiable: false, nodeKeyType: 'ec', namedCurve: 'secp256k1', digest: null, dsaEncoding: null } as const),
 };
 
 /** Small memo: a registry holds a handful of keys but chains hold millions of entries. */
