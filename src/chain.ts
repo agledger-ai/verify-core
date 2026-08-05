@@ -34,7 +34,9 @@ import {
   decodePredicate,
   deepEqual,
   extractChainClaim,
+  extractKid,
   extractOnBehalfOfClaim,
+  resolveKeyAlgorithm,
   sha256Hex,
   stripEnvelopeExtensions,
   verifyCoseSign1,
@@ -57,6 +59,15 @@ export interface VerificationKey {
    * independent key or against the engine's own answer key.
    */
   source: KeySource;
+  /**
+   * Algorithm the key registry DECLARES for this key (the engine's
+   * `vault_signing_keys.algorithm` column), when the input surface carries it.
+   * Cross-checked against the algorithm the SPKI key material actually commits
+   * to: a divergence means the registry row lies about its own key and fails
+   * CHAIN_ALG_MISMATCH. The declared string never selects the verification
+   * code path; only the key material does.
+   */
+  algorithm?: string;
   /** Optional temporal-validity window (present on the dump path only). */
   activatedAt?: string;
   retiredAt?: string | null;
@@ -109,8 +120,11 @@ export interface SignatureOutcome {
    * - `not-checked` — a structural/chain check failed at or before this entry,
    *   so verification short-circuited before reaching the signature. Reads as a
    *   consequence of an upstream break, never as a benign skip.
+   * - `unsupported`: the entry's trusted key commits to an algorithm this
+   *   build cannot compute (CHAIN_UNSUPPORTED_ALGORITHM). A failure state,
+   *   never a benign skip.
    */
-  state: 'ok' | 'invalid' | 'unsigned' | 'skipped' | 'not-checked' | 'decode-fail';
+  state: 'ok' | 'invalid' | 'unsigned' | 'skipped' | 'not-checked' | 'decode-fail' | 'unsupported';
   /** Provenance of the key the signature was checked against ('ok' / 'invalid'). */
   keySource?: KeySource;
 }
@@ -218,8 +232,9 @@ export function verifyChain(
       case 'skipped':
         coverage.skipped++;
         break;
-      // 'not-checked' / 'invalid' / 'decode-fail' are failure states — the entry
-      // is already counted as broken, so it contributes to no coverage bucket.
+      // 'not-checked' / 'invalid' / 'decode-fail' / 'unsupported' are failure
+      // states: the entry is already counted as broken, so it contributes to
+      // no coverage bucket.
     }
 
     previousHash = entry.payloadHash;
@@ -399,6 +414,41 @@ function verifyEntry(
     );
   }
 
+  // Registry self-consistency: when the input surface declares an algorithm for
+  // this key (vault_signing_keys.algorithm), it must agree with what the SPKI
+  // key material commits to. A registry row that lies about its own key is the
+  // signature of a mis-registered key (the pre-guard P-256 corruption shape) or
+  // a rewritten registry, and nothing verified against it can be trusted.
+  if (key.algorithm !== undefined) {
+    const keyAlg = resolveKeyAlgorithm(key.spkiBase64);
+    if (
+      typeof keyAlg === 'object' &&
+      keyAlg.name.toLowerCase() !== key.algorithm.toLowerCase()
+    ) {
+      return fail(
+        scopeId,
+        expectedPosition,
+        'CHAIN_ALG_MISMATCH',
+        `Key registry declares algorithm=${key.algorithm} for key ${entry.signingKeyId}, but the key material is ${keyAlg.name}.`,
+      );
+    }
+  }
+
+  // Signed-kid binding (engine mirror: signing_key_drift, #893). The row's
+  // signingKeyId column selected the key above, but the column is a
+  // denormalized convenience; the kid at protected-header label 4 is
+  // signature-covered. A divergence means the column was rewritten after
+  // signing, e.g. to point verification at a key the tamperer controls.
+  const signedKid = extractKid(parts.protectedBstr);
+  if (signedKid !== null && signedKid !== entry.signingKeyId) {
+    return fail(
+      scopeId,
+      expectedPosition,
+      'CHAIN_SIGNING_KEY_DRIFT',
+      `Row signingKeyId=${entry.signingKeyId} does not match the signature-covered kid ${signedKid} in the protected header.`,
+    );
+  }
+
   // Input-gated: temporal key-validity. Only when both the key window and the
   // entry write time are present (dump path).
   if (entry.createdAt && (key.activatedAt || key.retiredAt)) {
@@ -411,10 +461,40 @@ function verifyEntry(
 
   const outcome = verifyCoseSign1(envelopeBytes, key.spkiBase64);
   if (outcome === 'unsigned') {
+    // An all-zero signature slot on an entry that CLAIMS a signing key. Under
+    // a key policy this must fail: an auditor who demanded signed entries
+    // (requireKeyId / requireOutOfBandKeys) must never count a zeroed
+    // signature as green just because the policy gates above passed.
+    if (options.requireKeyId || options.requireOutOfBandKeys) {
+      return fail(
+        scopeId,
+        expectedPosition,
+        'CHAIN_KEY_POLICY_VIOLATION',
+        `Entry claims signingKeyId=${entry.signingKeyId} but carries an all-zero signature; this run requires signed entries (requireKeyId / requireOutOfBandKeys).`,
+      );
+    }
     return { scopeId, position: expectedPosition, valid: true, signature: 'unsigned' };
   }
   if (outcome === 'ok') {
     return { scopeId, position: expectedPosition, valid: true, signature: 'ok', keySource: key.source };
+  }
+  if (outcome === 'alg-mismatch') {
+    return fail(
+      scopeId,
+      expectedPosition,
+      'CHAIN_ALG_MISMATCH',
+      `Protected-header alg (label 1) is absent or is not an algorithm key ${entry.signingKeyId} can produce. Tamper class: a rewritten alg must read as forgery, never as an upgrade notice.`,
+      'invalid',
+    );
+  }
+  if (outcome === 'unsupported-key-algorithm') {
+    return fail(
+      scopeId,
+      expectedPosition,
+      'CHAIN_UNSUPPORTED_ALGORITHM',
+      `Key ${entry.signingKeyId} commits to an algorithm this verifier build cannot compute. The chain is NOT verified; upgrade the verifier.`,
+      'unsupported',
+    );
   }
   return fail(
     scopeId,

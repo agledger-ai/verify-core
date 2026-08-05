@@ -4,6 +4,27 @@ All notable changes to `@agledger/verify-core` will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.1.0] - 2026-08-05
+
+The verifier forward-compatibility floor: this release prepares every verification path for a future signing-algorithm change without emitting or accepting anything new itself. Legitimate Ed25519 chains verify byte-identically to 1.0.4. What changes is how non-Ed25519 and tampered inputs are classified, and all of those changes are fail-closed.
+
+### Changed (published API: widened unions, stricter classification)
+
+- **`CoseVerifyOutcome` gains `'alg-mismatch'` and `'unsupported-key-algorithm'`.** Algorithm dispatch now binds to the TRUSTED verification key (the SPKI AlgorithmIdentifier), never to the protected header: at dispatch time the signature has not been checked, so the header `alg` is attacker-controlled input. The header value is asserted equal to the key's expectation. A mismatch (including a missing `alg`, an unassigned value, or any MAC label) is `'alg-mismatch'`, a tamper-class result: one flipped header byte reads as forgery, never as an upgrade notice. A key whose algorithm this build cannot compute is `'unsupported-key-algorithm'`, which callers must fail closed on.
+- **`verifyEd25519Bytes` refuses non-Ed25519 keys.** Node's `verify(null, ...)` silently computes ECDSA/SHA-256 for EC keys, so a P-256 key could "verify" a signature no conformant EdDSA verifier accepts (the engine-side signing guard is api#1089). It now returns `false` for any non-Ed25519 key.
+- **The all-zero unsigned sentinel is evaluated after algorithm resolution, at the key's expected signature length.** A zero fill of a different algorithm's length is no longer misread as unsigned or as forged.
+- **`decodeCoseSign1` rejects untagged COSE_Sign1** (leading byte must be `0xd2`, CBOR tag 18), matching the engine's decoder. Producer and offline verifier previously disagreed on what a COSE_Sign1 is.
+- **`FailureCode` gains `CHAIN_ALG_MISMATCH`, `CHAIN_UNSUPPORTED_ALGORITHM`, and `CHAIN_SIGNING_KEY_DRIFT`**; `SignatureOutcome['state']` gains `'unsupported'`. `CHAIN_UNSUPPORTED_ALGORITHM` is always `valid: false` and breaks the chain.
+- **`ReceiptVerifyOutcome` gains `'unsupported-algorithm'`** for a transparency-service key this build cannot compute; previously that shape would have surfaced as a false `'signature-invalid'`.
+- **An all-zero signature on an entry that CLAIMS a signing key now fails `CHAIN_KEY_POLICY_VIOLATION` under `requireKeyId` / `requireOutOfBandKeys`.** An auditor who demanded signed entries no longer counts a zeroed signature as green.
+
+### Added
+
+- **Signed-kid binding (`CHAIN_SIGNING_KEY_DRIFT`).** The signature-covered `kid` (protected header label 4) is cross-checked against the row's `signingKeyId` column, mirroring the engine's `signing_key_drift` check (#893). A rewritten column that points verification at a different registry key now fails even when the substituted signature verifies.
+- **Registry algorithm cross-check.** `VerificationKey` gains an optional `algorithm` field (the registry row's declared algorithm, e.g. `vault_signing_keys.algorithm`). When present it is compared against what the key material actually commits to; a registry row that lies about its own key fails `CHAIN_ALG_MISMATCH`. The declared string never selects the verification code path.
+- **`resolveKeyAlgorithm` and `extractKid`** exported, with the `KeyAlgorithm` type. Ed25519 accepts COSE alg `-8` (EdDSA) and the RFC 9864 fully-specified `-19` interchangeably, so a future producer moving to `-19` verifies on this floor.
+- Conformance corpus refreshed from engine 1.3.4 (was 0.26.5), including new `key-substitution-kid-drift` and registry-lie vectors.
+
 ## [1.0.4] - 2026-08-03
 
 Dependency and test only. No verification, signing, or wire-format change; verification output is byte-identical.
