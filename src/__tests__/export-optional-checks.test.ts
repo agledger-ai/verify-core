@@ -41,24 +41,19 @@ describe('export-path optional checks (Pass-2 wire parity)', () => {
 
   it('surfaces verificationGuide.unsignedFields as unsignedProjectionFields (api#769)', () => {
     const base = loadValid();
-    // Default: a corpus export without the guidance reports an empty list.
-    expect(verifyAuditExport(base).unsignedProjectionFields).toEqual([]);
 
-    // When the engine ships the guidance, the verifier echoes it so a caller can
-    // warn that a PASS doesn't vouch for the unsigned display labels.
-    const withGuide: RecordAuditExportInput = {
-      ...base,
-      verificationGuide: {
-        unsignedFields: ['actorDisplayName', 'actorOwnerType', 'humanReadableLabel'],
-      },
-    };
-    const result = verifyAuditExport(withGuide);
-    expect(result.valid).toBe(true);
-    expect(result.unsignedProjectionFields).toEqual([
-      'actorDisplayName',
-      'actorOwnerType',
-      'humanReadableLabel',
-    ]);
+    // The real engine ships the guidance on every export; the verifier echoes
+    // it verbatim so a caller can warn that a PASS doesn't vouch for the
+    // unsigned display labels.
+    const real = verifyAuditExport(base);
+    expect(real.valid).toBe(true);
+    expect(real.unsignedProjectionFields).toEqual(base.verificationGuide?.unsignedFields ?? []);
+    expect(real.unsignedProjectionFields.length).toBeGreaterThan(0);
+
+    // An export without the guidance (pre-#769 engines) reports an empty list.
+    const withoutGuide: RecordAuditExportInput = { ...base };
+    delete withoutGuide.verificationGuide;
+    expect(verifyAuditExport(withoutGuide).unsignedProjectionFields).toEqual([]);
   });
 
   it('still applies the checks when out-of-band keys override the embedded set', () => {

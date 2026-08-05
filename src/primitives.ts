@@ -30,12 +30,91 @@ export function sha256HexString(s: string): string {
   return hash('sha256', s, 'hex');
 }
 
+// --- Key-bound algorithm resolution ---
+
+/**
+ * What a verification key's SPKI AlgorithmIdentifier says about how its
+ * signatures must be checked. Derived from the TRUSTED key material, never
+ * from the protected header (attacker-controlled at dispatch time, since the
+ * signature has not been checked yet): the header's `alg` is asserted EQUAL
+ * to the key's expectation, it never selects the code path. The table is
+ * restricted to asymmetric signature algorithms by construction; a COSE MAC
+ * label (e.g. 5, HMAC-256/256) can never match any entry, so the published
+ * public key can never be repurposed as a MAC key.
+ */
+export interface KeyAlgorithm {
+  /** Registry name, matching the engine's `vault_signing_keys.algorithm` values. */
+  name: string;
+  /** COSE `alg` values (protected header label 1) acceptable for this key. */
+  coseAlgs: readonly number[];
+  /** Raw signature length; also the length of the all-zero unsigned sentinel. */
+  signatureLength: number;
+  /** Whether THIS build can compute the algorithm (Ed25519 only today). */
+  verifiable: boolean;
+}
+
+/**
+ * COSE alg code points per key type. Both the original and the RFC 9864
+ * fully-specified registrations are accepted where assigned, so a producer
+ * moving from `-8` (EdDSA) to `-19` (Ed25519) does not read as tampering.
+ */
+const KEY_ALGORITHMS: Record<string, KeyAlgorithm> = {
+  ed25519: { name: 'Ed25519', coseAlgs: [-8, -19], signatureLength: 64, verifiable: true },
+  'ec:prime256v1': { name: 'ES256', coseAlgs: [-7, -9], signatureLength: 64, verifiable: false },
+  'ec:secp384r1': { name: 'ES384', coseAlgs: [-35], signatureLength: 96, verifiable: false },
+  'ec:secp521r1': { name: 'ES512', coseAlgs: [-36], signatureLength: 132, verifiable: false },
+  'ec:secp256k1': { name: 'ES256K', coseAlgs: [-47], signatureLength: 64, verifiable: false },
+};
+
+/** Small memo: a registry holds a handful of keys but chains hold millions of entries. */
+const KEY_ALG_CACHE = new Map<string, KeyAlgorithm | 'unparseable' | 'unrecognized'>();
+const KEY_ALG_CACHE_MAX = 256;
+
+/**
+ * Resolve the algorithm a base64 SPKI DER public key commits to. Returns:
+ *
+ * - a `KeyAlgorithm` when the key type is in the table (whether or not this
+ *   build can verify it; `verifiable` says which);
+ * - `'unrecognized'` for a well-formed key of a type the table does not carry
+ *   (RSA, X25519, a curve with no COSE registration). Surfaces as
+ *   CHAIN_UNSUPPORTED_ALGORITHM, never as a forgery;
+ * - `'unparseable'` when the bytes are not a public key at all.
+ */
+export function resolveKeyAlgorithm(
+  publicKeyBase64: string,
+): KeyAlgorithm | 'unparseable' | 'unrecognized' {
+  const cached = KEY_ALG_CACHE.get(publicKeyBase64);
+  if (cached !== undefined) return cached;
+  let resolved: KeyAlgorithm | 'unparseable' | 'unrecognized';
+  try {
+    const keyObj = createPublicKey({
+      key: Buffer.from(publicKeyBase64, 'base64'),
+      format: 'der',
+      type: 'spki',
+    });
+    const type = keyObj.asymmetricKeyType;
+    const tableKey =
+      type === 'ec' ? `ec:${keyObj.asymmetricKeyDetails?.namedCurve ?? 'unknown'}` : (type ?? '');
+    resolved = KEY_ALGORITHMS[tableKey] ?? 'unrecognized';
+  } catch {
+    resolved = 'unparseable';
+  }
+  if (KEY_ALG_CACHE.size >= KEY_ALG_CACHE_MAX) KEY_ALG_CACHE.clear();
+  KEY_ALG_CACHE.set(publicKeyBase64, resolved);
+  return resolved;
+}
+
 // --- Ed25519 verification (raw bytes) ---
 
 /**
  * Verify an Ed25519 signature over raw bytes.
  * `publicKeyBase64` is the SPKI DER public key, base64-encoded
  * (matches the engine's vault_signing_keys.public_key column).
+ *
+ * Refuses non-Ed25519 keys. Node's `verify(null, ...)` silently falls back to
+ * ECDSA/SHA-256 for EC keys, which would accept a signature no conformant
+ * EdDSA verifier accepts (the engine guards the signing side the same way,
+ * api#1089), so the key type is asserted before any crypto runs.
  */
 export function verifyEd25519Bytes(
   publicKeyBase64: string,
@@ -48,6 +127,7 @@ export function verifyEd25519Bytes(
       format: 'der',
       type: 'spki',
     });
+    if (publicKeyObj.asymmetricKeyType !== 'ed25519') return false;
     return verify(null, input, publicKeyObj, signature);
   } catch {
     return false;
@@ -58,7 +138,12 @@ export function verifyEd25519Bytes(
 
 /** CBOR tag 18 — tagged COSE_Sign1 envelope. */
 const COSE_SIGN1_TAG = 18;
+/** CBOR major type 6 (tag), value 18, short form: the required leading byte. */
+const COSE_SIGN1_TAG_PREFIX = 0xd2;
 const SIG_STRUCTURE_CONTEXT = 'Signature1';
+/** COSE protected-header labels (RFC 9052 §3.1). */
+const COSE_HEADER_ALG = 1;
+const COSE_HEADER_KID = 4;
 
 /**
  * Decode a tagged COSE_Sign1 envelope into its three load-bearing parts.
@@ -72,6 +157,12 @@ export interface CoseSign1Parts {
 }
 
 export function decodeCoseSign1(bytes: Uint8Array): CoseSign1Parts | null {
+  // Tag 18 is required (short-form 0xd2, matching the engine's encoder).
+  // cborg's tag handler unwraps tag 18 but also returns an UNTAGGED 4-element
+  // array verbatim, and the engine rejects untagged envelopes: producer and
+  // offline verifier must agree on what a COSE_Sign1 is, so gate on the
+  // leading byte the same way the engine's decoder does.
+  if (bytes.length === 0 || bytes[0] !== COSE_SIGN1_TAG_PREFIX) return null;
   try {
     const decoded = cborDecode(bytes, {
       useMaps: true,
@@ -105,11 +196,33 @@ export function decodeCoseSign1(bytes: Uint8Array): CoseSign1Parts | null {
  *   - 'ok'           if the signature verifies
  *   - 'decode-fail'  if the envelope is malformed
  *   - 'invalid'      if the signature does not verify
- *   - 'unsigned'     if the signature slot is all-zero (engine booted without
- *                    VAULT_SIGNING_KEY at write time — chain integrity falls
- *                    back to the hash-link layer)
+ *   - 'unsigned'     if the signature slot is all-zero at the key's expected
+ *                    signature length (engine booted without VAULT_SIGNING_KEY
+ *                    at write time; chain integrity falls back to the hash-link
+ *                    layer)
+ *   - 'alg-mismatch' if the protected header's `alg` (label 1) is absent or is
+ *                    not an algorithm the trusted key can produce. Tamper
+ *                    class: one flipped header byte must read as forgery,
+ *                    never as an upgrade notice
+ *   - 'unsupported-key-algorithm' if the trusted key itself commits to an
+ *                    algorithm this build cannot compute (and, when the alg is
+ *                    recognized, the header agrees with it). Upgrade class,
+ *                    but NEVER a pass: callers must fail closed
+ *
+ * Dispatch is bound to the TRUSTED key, not the header: at this point the
+ * signature has not been checked, so the header `alg` is attacker-controlled
+ * input. It is asserted equal to the key's expectation and never selects the
+ * code path. The all-zero sentinel is checked only AFTER algorithm resolution,
+ * at the key's expected signature length, so a zero-filled envelope of a
+ * different algorithm's length is never misread as unsigned (or as forged).
  */
-export type CoseVerifyOutcome = 'ok' | 'decode-fail' | 'invalid' | 'unsigned';
+export type CoseVerifyOutcome =
+  | 'ok'
+  | 'decode-fail'
+  | 'invalid'
+  | 'unsigned'
+  | 'alg-mismatch'
+  | 'unsupported-key-algorithm';
 
 export function verifyCoseSign1(
   coseSign1: Uint8Array,
@@ -118,10 +231,20 @@ export function verifyCoseSign1(
   const parts = decodeCoseSign1(coseSign1);
   if (!parts) return 'decode-fail';
 
-  // Unsigned-mode envelopes carry 64 zero bytes in the signature slot. Detected
-  // here so the caller can distinguish "engine booted without a signing key"
-  // from "signature didn't verify."
-  if (parts.signature.length === 64 && parts.signature.every((b) => b === 0)) {
+  const keyAlg = resolveKeyAlgorithm(publicKeyBase64);
+  // A key that does not parse can verify nothing; preserve the historical
+  // 'invalid' rather than misreporting garbage bytes as an algorithm gap.
+  if (keyAlg === 'unparseable') return 'invalid';
+  if (keyAlg === 'unrecognized') return 'unsupported-key-algorithm';
+
+  const headerAlg = extractHeaderAlg(parts.protectedBstr);
+  if (headerAlg === null || !keyAlg.coseAlgs.includes(headerAlg)) return 'alg-mismatch';
+  if (!keyAlg.verifiable) return 'unsupported-key-algorithm';
+
+  if (
+    parts.signature.length === keyAlg.signatureLength &&
+    parts.signature.every((b) => b === 0)
+  ) {
     return 'unsigned';
   }
 
@@ -133,6 +256,37 @@ export function verifyCoseSign1(
   ];
   const toBeSigned = cborEncode(sigStructure, rfc8949EncodeOptions);
   return verifyEd25519Bytes(publicKeyBase64, toBeSigned, parts.signature) ? 'ok' : 'invalid';
+}
+
+/** Decode the protected header's `alg` (label 1); null when absent or not an int. */
+function extractHeaderAlg(protectedBstr: Uint8Array): number | null {
+  try {
+    const ph = cborDecode(protectedBstr, { useMaps: true }) as Map<number, unknown>;
+    const alg = ph.get(COSE_HEADER_ALG);
+    if (typeof alg === 'number' && Number.isInteger(alg)) return alg;
+    if (typeof alg === 'bigint') return Number(alg);
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Extract the signature-covered `kid` (protected header label 4) as lowercase
+ * hex, matching the engine's `vault_signing_keys.key_id` shape. Returns null
+ * when absent or malformed. The caller cross-checks it against the row's
+ * `signingKeyId` column: the column is a denormalized convenience, the kid is
+ * signed, so a rewritten column surfaces as drift (engine mirror: #893).
+ */
+export function extractKid(protectedBstr: Uint8Array): string | null {
+  try {
+    const ph = cborDecode(protectedBstr, { useMaps: true }) as Map<number, unknown>;
+    const kid = ph.get(COSE_HEADER_KID);
+    if (!(kid instanceof Uint8Array)) return null;
+    return Buffer.from(kid).toString('hex');
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -552,8 +706,16 @@ export function extractReceiptInclusionProof(
  *   - 'signature-invalid' — TS signature fails (root cannot be trusted)
  *   - 'root-mismatch'     — reconstructed root != COSE payload (proof lies about
  *                           which tree the leaf belongs to)
+ *   - 'unsupported-algorithm': the TS key commits to an algorithm this build
+ *                           cannot compute. Fail closed: the Receipt may be
+ *                           genuine, but it is NOT verified
  */
-export type ReceiptVerifyOutcome = 'ok' | 'decode-fail' | 'signature-invalid' | 'root-mismatch';
+export type ReceiptVerifyOutcome =
+  | 'ok'
+  | 'decode-fail'
+  | 'signature-invalid'
+  | 'root-mismatch'
+  | 'unsupported-algorithm';
 
 export function verifyReceipt(
   receiptBytes: Uint8Array,
@@ -563,6 +725,7 @@ export function verifyReceipt(
   const parts = decodeCoseSign1(receiptBytes);
   if (!parts) return 'decode-fail';
   const sigOk = verifyCoseSign1(receiptBytes, tsPublicKeyBase64);
+  if (sigOk === 'unsupported-key-algorithm') return 'unsupported-algorithm';
   if (sigOk !== 'ok') return 'signature-invalid';
 
   const vdp = extractReceiptInclusionProof(receiptBytes);

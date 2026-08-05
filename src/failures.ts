@@ -53,6 +53,9 @@ export type FailureCode =
   | 'CHAIN_SIGNATURE_MISSING_KEY'
   | 'CHAIN_KEY_POLICY_VIOLATION'
   | 'CHAIN_KEY_EXPIRED'
+  | 'CHAIN_ALG_MISMATCH'
+  | 'CHAIN_UNSUPPORTED_ALGORITHM'
+  | 'CHAIN_SIGNING_KEY_DRIFT'
   // --- vault checkpoints ---
   | 'CHECKPOINT_ROW_MISSING'
   | 'CHECKPOINT_HASH_MISMATCH'
@@ -101,6 +104,12 @@ const SUGGESTIONS: Record<FailureCode, string> = {
     'The entry\'s signing key violates the caller\'s trust policy (requireKeyId, or out-of-band keys required). Re-run with the expected key id, or with keys obtained out of band rather than the engine-embedded set.',
   CHAIN_KEY_EXPIRED:
     'The entry was signed outside its signing key\'s activated..retired window. A retired or not-yet-active key produced this entry — possible use of a compromised retired key.',
+  CHAIN_ALG_MISMATCH:
+    'The algorithm in the signed protected header (label 1) is not one the entry\'s trusted verification key can produce, or the key registry\'s declared algorithm contradicts the key material itself. Tamper class: the header alg or the key registry was rewritten. Treat the entry as forged; obtain the verification keys out of band and re-run.',
+  CHAIN_UNSUPPORTED_ALGORITHM:
+    'The entry\'s trusted verification key commits to a signature algorithm this verifier build cannot compute. The chain is NOT verified: upgrade to a verifier version that supports the algorithm and re-run. Never treat this result as a pass.',
+  CHAIN_SIGNING_KEY_DRIFT:
+    'The entry\'s signingKeyId column names a different key than the signature-covered kid in the COSE protected header. The column is a denormalized convenience and was rewritten after signing (possibly to point verification at another key). Trust the signed kid; treat the row as tampered.',
   CHECKPOINT_ROW_MISSING:
     'A signed checkpoint anchors a position that has no matching chain row. The chain was truncated below a checkpoint (out-of-band DELETE/TRUNCATE) — the checkpoint is proof of the missing rows.',
   CHECKPOINT_HASH_MISMATCH:
