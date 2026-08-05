@@ -15,9 +15,9 @@ import type { NormalizedEntry, VerificationKey } from '../chain.js';
  * The verifier forward-compatibility floor (signing-agility Phase 0).
  *
  * Exit criteria pinned here:
- *   - a hand-built, conformant ES256 envelope that no engine produces yields
- *     CHAIN_UNSUPPORTED_ALGORITHM with valid:false (an upgrade signal, but
- *     never a pass);
+ *   - a conformant ES256 envelope verifies (signing-agility wave 2), and an
+ *     algorithm past this build (ES384) yields CHAIN_UNSUPPORTED_ALGORITHM
+ *     with valid:false (an upgrade signal, but never a pass);
  *   - a tampered-alg Ed25519 envelope yields a tamper-class failure, never an
  *     upgrade notice (one flipped header byte must not downgrade a forgery
  *     alarm);
@@ -121,7 +121,7 @@ describe('resolveKeyAlgorithm', () => {
     const edAlg = resolveKeyAlgorithm(edKey.spkiBase64);
     const esAlg = resolveKeyAlgorithm(esKey.spkiBase64);
     expect(edAlg).toMatchObject({ name: 'Ed25519', verifiable: true, signatureLength: 64 });
-    expect(esAlg).toMatchObject({ name: 'ES256', verifiable: false, signatureLength: 64 });
+    expect(esAlg).toMatchObject({ name: 'ES256', verifiable: true, signatureLength: 64 });
   });
 
   it('reports unrecognized key types without claiming forgery', () => {
@@ -142,23 +142,83 @@ describe('verifyEd25519Bytes refuses non-Ed25519 keys (api#1089 mirror)', () => 
   });
 });
 
-describe('exit criterion: conformant ES256 envelope', () => {
+describe('ES256 verification (signing-agility wave 2)', () => {
   const envelope = buildEnvelope({ alg: -7, kidHex: ES_KEY_ID, position: 1, previousHash: null, signer: esSigner });
 
+  it('a conformant ES256 envelope verifies ok', () => {
+    expect(verifyCoseSign1(envelope, esKey.spkiBase64)).toBe('ok');
+  });
+
+  it('the chain walk passes with signature ok', () => {
+    const result = verifyChain([toEntry(envelope, 1, null, ES_KEY_ID)], registry(esKey));
+    expect(result.valid).toBe(true);
+    expect(result.entries[0]?.signature).toBe('ok');
+  });
+
+  it('accepts the RFC 9864 fully-specified ESP256 code point (-9)', () => {
+    const esp = buildEnvelope({ alg: -9, kidHex: ES_KEY_ID, position: 1, previousHash: null, signer: esSigner });
+    expect(verifyCoseSign1(esp, esKey.spkiBase64)).toBe('ok');
+  });
+
+  it('a corrupted ES256 signature is invalid, not unsupported', () => {
+    const bytes = new Uint8Array(envelope);
+    bytes[bytes.length - 1] ^= 0x01;
+    expect(verifyCoseSign1(bytes, esKey.spkiBase64)).toBe('invalid');
+  });
+
+  it('a DER-encoded ECDSA signature does not verify (the wire is raw r||s)', () => {
+    // Same key, same toBeSigned, but DER encoding: a producer that skips
+    // ieee-p1363 must read as invalid, not silently interop.
+    const der = buildEnvelope({
+      alg: -7,
+      kidHex: ES_KEY_ID,
+      position: 1,
+      previousHash: null,
+      signer: (tbs) => new Uint8Array(cryptoSign('sha256', tbs, es.privateKey)),
+    });
+    expect(verifyCoseSign1(der, esKey.spkiBase64)).toBe('invalid');
+  });
+
+  it('64 zero bytes under a P-256 key reads unsigned (key-length-derived sentinel)', () => {
+    const zeroSig = buildEnvelope({
+      alg: -7,
+      kidHex: ES_KEY_ID,
+      position: 1,
+      previousHash: null,
+      signer: esSigner,
+      signatureOverride: new Uint8Array(64),
+    });
+    expect(verifyCoseSign1(zeroSig, esKey.spkiBase64)).toBe('unsigned');
+  });
+});
+
+describe('exit criterion preserved: an algorithm past this build fails closed', () => {
+  // ES384 is recognized in the table but not verifiable; it inherits the role
+  // ES256 played before wave 2: an upgrade signal, never a pass.
+  const es384 = generateKeyPairSync('ec', { namedCurve: 'secp384r1' });
+  const es384Key: VerificationKey = {
+    keyId: ES_KEY_ID,
+    spkiBase64: spkiBase64(es384.publicKey),
+    source: 'out-of-band',
+  };
+  const envelope = buildEnvelope({
+    alg: -35,
+    kidHex: ES_KEY_ID,
+    position: 1,
+    previousHash: null,
+    signer: (tbs) =>
+      new Uint8Array(cryptoSign('sha384', tbs, { key: es384.privateKey, dsaEncoding: 'ieee-p1363' })),
+  });
+
   it('verifyCoseSign1 reports unsupported-key-algorithm, never invalid or ok', () => {
-    expect(verifyCoseSign1(envelope, esKey.spkiBase64)).toBe('unsupported-key-algorithm');
+    expect(verifyCoseSign1(envelope, es384Key.spkiBase64)).toBe('unsupported-key-algorithm');
   });
 
   it('the chain walk fails CHAIN_UNSUPPORTED_ALGORITHM with valid:false', () => {
-    const result = verifyChain([toEntry(envelope, 1, null, ES_KEY_ID)], registry(esKey));
+    const result = verifyChain([toEntry(envelope, 1, null, ES_KEY_ID)], registry(es384Key));
     expect(result.valid).toBe(false);
     expect(result.brokenAt?.code).toBe('CHAIN_UNSUPPORTED_ALGORITHM');
     expect(result.entries[0]?.signature).toBe('unsupported');
-  });
-
-  it('fully-specified ESP256 (-9) is equally recognized as unsupported, not tamper', () => {
-    const esp = buildEnvelope({ alg: -9, kidHex: ES_KEY_ID, position: 1, previousHash: null, signer: esSigner });
-    expect(verifyCoseSign1(esp, esKey.spkiBase64)).toBe('unsupported-key-algorithm');
   });
 });
 

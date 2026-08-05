@@ -38,6 +38,7 @@ export {
   sha256Hex,
   sha256HexString,
   verifyEd25519Bytes,
+  verifySignatureBytes,
   resolveKeyAlgorithm,
   decodeCoseSign1,
   verifyCoseSign1,

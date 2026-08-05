@@ -49,8 +49,21 @@ export interface KeyAlgorithm {
   coseAlgs: readonly number[];
   /** Raw signature length; also the length of the all-zero unsigned sentinel. */
   signatureLength: number;
-  /** Whether THIS build can compute the algorithm (Ed25519 only today). */
+  /** Whether THIS build can compute the algorithm (Ed25519 and ES256 today). */
   verifiable: boolean;
+  /** Node `asymmetricKeyType` the key material must carry. */
+  nodeKeyType: 'ed25519' | 'ec';
+  /** OpenSSL curve name from `asymmetricKeyDetails.namedCurve` (EC only). */
+  namedCurve: string | null;
+  /**
+   * Digest passed as the FIRST POSITIONAL argument to node:crypto verify().
+   * Part of algorithm identity (RFC 9053 §2.1 fixes SHA-256 to ES256), not a
+   * caller choice: passing null for an EC key silently gets Node's
+   * key-type-dispatched fallback, so the dispatcher refuses that combination.
+   */
+  digest: 'sha256' | null;
+  /** Signature encoding for ECDSA (COSE requires raw r||s, not DER). */
+  dsaEncoding: 'ieee-p1363' | null;
 }
 
 /**
@@ -59,11 +72,11 @@ export interface KeyAlgorithm {
  * moving from `-8` (EdDSA) to `-19` (Ed25519) does not read as tampering.
  */
 const KEY_ALGORITHMS: Record<string, KeyAlgorithm> = {
-  ed25519: { name: 'Ed25519', coseAlgs: [-8, -19], signatureLength: 64, verifiable: true },
-  'ec:prime256v1': { name: 'ES256', coseAlgs: [-7, -9], signatureLength: 64, verifiable: false },
-  'ec:secp384r1': { name: 'ES384', coseAlgs: [-35], signatureLength: 96, verifiable: false },
-  'ec:secp521r1': { name: 'ES512', coseAlgs: [-36], signatureLength: 132, verifiable: false },
-  'ec:secp256k1': { name: 'ES256K', coseAlgs: [-47], signatureLength: 64, verifiable: false },
+  ed25519: { name: 'Ed25519', coseAlgs: [-8, -19], signatureLength: 64, verifiable: true, nodeKeyType: 'ed25519', namedCurve: null, digest: null, dsaEncoding: null },
+  'ec:prime256v1': { name: 'ES256', coseAlgs: [-7, -9], signatureLength: 64, verifiable: true, nodeKeyType: 'ec', namedCurve: 'prime256v1', digest: 'sha256', dsaEncoding: 'ieee-p1363' },
+  'ec:secp384r1': { name: 'ES384', coseAlgs: [-35], signatureLength: 96, verifiable: false, nodeKeyType: 'ec', namedCurve: 'secp384r1', digest: null, dsaEncoding: null },
+  'ec:secp521r1': { name: 'ES512', coseAlgs: [-36], signatureLength: 132, verifiable: false, nodeKeyType: 'ec', namedCurve: 'secp521r1', digest: null, dsaEncoding: null },
+  'ec:secp256k1': { name: 'ES256K', coseAlgs: [-47], signatureLength: 64, verifiable: false, nodeKeyType: 'ec', namedCurve: 'secp256k1', digest: null, dsaEncoding: null },
 };
 
 /** Small memo: a registry holds a handful of keys but chains hold millions of entries. */
@@ -134,6 +147,50 @@ export function verifyEd25519Bytes(
   }
 }
 
+// --- Key-dispatched signature verification (Ed25519 + ES256) ---
+
+/**
+ * Verify a raw signature under whatever algorithm the TRUSTED key commits to.
+ * Generalizes `verifyEd25519Bytes`: the algorithm is resolved from the SPKI
+ * key material, never from any header, and only `verifiable` table entries
+ * dispatch; everything else returns false (fail closed; callers that need
+ * the upgrade-vs-forgery distinction use `resolveKeyAlgorithm` first, as
+ * `verifyCoseSign1` does).
+ *
+ * ES256 mirrors the engine's `verifyWithAlgorithm`: SHA-256 digest passed
+ * positionally, `dsaEncoding: 'ieee-p1363'` (COSE raw r||s, 64 bytes). The
+ * engine normalizes to low-S at sign time but, like the engine's verifier,
+ * high-S is accepted here: ECDSA malleability changes the envelope bytes,
+ * which the hash-link layer already pins.
+ */
+export function verifySignatureBytes(
+  publicKeyBase64: string,
+  input: Uint8Array,
+  signature: Uint8Array,
+): boolean {
+  const keyAlg = resolveKeyAlgorithm(publicKeyBase64);
+  if (typeof keyAlg !== 'object' || !keyAlg.verifiable) return false;
+  try {
+    const keyObj = createPublicKey({
+      key: Buffer.from(publicKeyBase64, 'base64'),
+      format: 'der',
+      type: 'spki',
+    });
+    // Redundant with resolution from the same bytes, kept so a refactor that
+    // ever passes the algorithm in from elsewhere cannot reach Node's silent
+    // key-type-dispatched fallback (the api#1089 trap).
+    if (keyObj.asymmetricKeyType !== keyAlg.nodeKeyType) return false;
+    if (keyAlg.nodeKeyType === 'ec') {
+      if (keyObj.asymmetricKeyDetails?.namedCurve !== keyAlg.namedCurve) return false;
+      if (keyAlg.digest === null || keyAlg.dsaEncoding === null) return false;
+      return verify(keyAlg.digest, input, { key: keyObj, dsaEncoding: keyAlg.dsaEncoding }, signature);
+    }
+    return verify(null, input, keyObj, signature);
+  } catch {
+    return false;
+  }
+}
+
 // --- COSE_Sign1 (RFC 9052 §4.4) verification ---
 
 /** CBOR tag 18 — tagged COSE_Sign1 envelope. */
@@ -189,8 +246,9 @@ export function decodeCoseSign1(bytes: Uint8Array): CoseSign1Parts | null {
  *
  * Reconstructs Sig_structure = ["Signature1", protected_bstr, h'' (empty
  * external_aad), payload_bstr] per RFC 9052 §4.4, deterministically CBOR-
- * encodes it (RFC 8949 §4.2.1), and runs Ed25519 verify. The producer used the
- * exact same construction, so byte-equality is required.
+ * encodes it (RFC 8949 §4.2.1), and verifies under the algorithm the trusted
+ * key commits to (Ed25519 or ES256). The producer used the exact same
+ * construction, so byte-equality is required.
  *
  * Returns:
  *   - 'ok'           if the signature verifies
@@ -255,7 +313,7 @@ export function verifyCoseSign1(
     parts.payloadBstr,
   ];
   const toBeSigned = cborEncode(sigStructure, rfc8949EncodeOptions);
-  return verifyEd25519Bytes(publicKeyBase64, toBeSigned, parts.signature) ? 'ok' : 'invalid';
+  return verifySignatureBytes(publicKeyBase64, toBeSigned, parts.signature) ? 'ok' : 'invalid';
 }
 
 /** Decode the protected header's `alg` (label 1); null when absent or not an int. */
