@@ -40,6 +40,7 @@ export {
   verifyEd25519Bytes,
   verifySignatureBytes,
   resolveKeyAlgorithm,
+  algorithmByName,
   runtimeCanCompute,
   describeUnsupportedAlgorithm,
   decodeCoseSign1,

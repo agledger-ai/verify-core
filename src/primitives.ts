@@ -82,6 +82,21 @@ const KEY_ALGORITHMS: Record<string, KeyAlgorithm> = {
   'ec:secp256k1': Object.freeze({ name: 'ES256K', coseAlgs: Object.freeze([-47]), signatureLength: 64, verifiable: false, nodeKeyType: 'ec', namedCurve: 'secp256k1', digest: null, dsaEncoding: null } as const),
 };
 
+/**
+ * Look up a table entry by its registry name (`Ed25519`, `ES256`, ...).
+ *
+ * Exists for the one question `resolveKeyAlgorithm` cannot answer: on a host
+ * that refuses to LOAD a key of some algorithm, there is no key object to
+ * resolve, yet that is exactly when a caller most needs to ask whether the
+ * algorithm is computable here. Pair with `runtimeCanCompute`.
+ */
+export function algorithmByName(name: string): KeyAlgorithm | null {
+  for (const alg of Object.values(KEY_ALGORITHMS)) {
+    if (alg.name === name) return alg;
+  }
+  return null;
+}
+
 /** Small memo: a registry holds a handful of keys but chains hold millions of entries. */
 const KEY_ALG_CACHE = new Map<string, KeyAlgorithm | 'unparseable' | 'unrecognized'>();
 const KEY_ALG_CACHE_MAX = 256;
@@ -131,6 +146,10 @@ export function resolveKeyAlgorithm(
  * ECDSA/SHA-256 for EC keys, which would accept a signature no conformant
  * EdDSA verifier accepts (the engine guards the signing side the same way,
  * api#1089), so the key type is asserted before any crypto runs.
+ *
+ * CAUTION for direct callers: as with `verifySignatureBytes`, `false` conflates
+ * "did not verify" with "this host cannot compute EdDSA". Check
+ * `runtimeCanCompute` first if that distinction matters to you.
  */
 export function verifyEd25519Bytes(
   publicKeyBase64: string,
@@ -212,22 +231,45 @@ function dispatchVerify(
  */
 const KAT_MESSAGE = Buffer.from('AGLedger verifier runtime known-answer test', 'utf8');
 
-const ALGORITHM_KATS: Record<string, { spkiBase64: string; signatureBase64: string }> = {
-  Ed25519: {
-    spkiBase64: 'MCowBQYDK2VwAyEAjChcTn8MOj5h5PpKz/+MvHfomativmvfmC1zV5Sczfo=',
-    signatureBase64:
-      'iinDVfJ5uwoE4aWjLhunX340+yPlu4l2S8RFG+IfXqzWoiIXYL/ND7+ouGVzAnejozCErkL9GneR1sc3vY1sAg==',
-  },
-  ES256: {
-    spkiBase64:
-      'MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEEyJ40hViXjp41rIWYdbJT9bUHWVjYWpsOLKdc4F1L+c4reEK7WmCx1fI4sl0okBN/lNvhZT+0HZ44aUw5HKmFA==',
-    signatureBase64:
-      'eQ8fKfXT5GuBUz7gueqcq9hTmzrJlSuaoF/ukCPtKJsxqrynVgIREn/XMPKbdSHp7wMyFOEAgmbVfoMDnR5x/Q==',
-  },
-};
+// Keyed on the frozen table entries themselves, not on `name`. A string-keyed
+// map is one typo away from silently reverting this whole mechanism: a missing
+// key reads as "no vector", the probe falls back to "supported", and every
+// refusal goes back to reporting as a forged signature. There is no string to
+// get wrong here, and the assertion below turns any remaining gap into a loud
+// failure at import rather than a quiet downgrade at audit time.
+const ALGORITHM_KATS = new Map<KeyAlgorithm, { spkiBase64: string; signatureBase64: string }>([
+  [
+    KEY_ALGORITHMS['ed25519']!,
+    {
+      spkiBase64: 'MCowBQYDK2VwAyEAjChcTn8MOj5h5PpKz/+MvHfomativmvfmC1zV5Sczfo=',
+      signatureBase64:
+        'iinDVfJ5uwoE4aWjLhunX340+yPlu4l2S8RFG+IfXqzWoiIXYL/ND7+ouGVzAnejozCErkL9GneR1sc3vY1sAg==',
+    },
+  ],
+  [
+    KEY_ALGORITHMS['ec:prime256v1']!,
+    {
+      spkiBase64:
+        'MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEEyJ40hViXjp41rIWYdbJT9bUHWVjYWpsOLKdc4F1L+c4reEK7WmCx1fI4sl0okBN/lNvhZT+0HZ44aUw5HKmFA==',
+      signatureBase64:
+        'eQ8fKfXT5GuBUz7gueqcq9hTmzrJlSuaoF/ukCPtKJsxqrynVgIREn/XMPKbdSHp7wMyFOEAgmbVfoMDnR5x/Q==',
+    },
+  ],
+]);
+
+// Every algorithm this build claims to compute must carry a vector proving the
+// host can compute it. Failing at import is the point: a packaging slip here
+// would otherwise surface as silently unverified audit chains.
+for (const alg of Object.values(KEY_ALGORITHMS)) {
+  if (alg.verifiable && !ALGORITHM_KATS.has(alg)) {
+    throw new Error(
+      `@agledger/verify-core packaging error: ${alg.name} is marked verifiable but carries no known-answer vector.`,
+    );
+  }
+}
 
 /** One probe per algorithm per process; the answer cannot change mid-run. */
-const RUNTIME_SUPPORT_CACHE = new Map<string, boolean>();
+const RUNTIME_SUPPORT_CACHE = new Map<KeyAlgorithm, boolean>();
 
 /**
  * Whether the host runtime can actually compute `keyAlg`, proven by running
@@ -240,27 +282,27 @@ const RUNTIME_SUPPORT_CACHE = new Map<string, boolean>();
  * as tamper evidence.
  */
 export function runtimeCanCompute(keyAlg: KeyAlgorithm): boolean {
-  const cached = RUNTIME_SUPPORT_CACHE.get(keyAlg.name);
+  if (!keyAlg.verifiable) return false;
+  const kat = ALGORITHM_KATS.get(keyAlg);
+  // Unreachable for table entries (the import-time assertion above). A caller
+  // that fabricated its own KeyAlgorithm lands here: fail closed, and do not
+  // memoize, so a hostile or buggy consumer cannot poison the answer that
+  // real verification depends on.
+  if (!kat) return false;
+  const cached = RUNTIME_SUPPORT_CACHE.get(keyAlg);
   if (cached !== undefined) return cached;
-  const kat = ALGORITHM_KATS[keyAlg.name];
   let supported: boolean;
-  if (!kat) {
-    // A verifiable algorithm with no KAT is a packaging error, not a runtime
-    // gap. Do not silently downgrade real verification to "unsupported".
-    supported = true;
-  } else {
-    try {
-      supported = dispatchVerify(
-        keyAlg,
-        kat.spkiBase64,
-        KAT_MESSAGE,
-        Buffer.from(kat.signatureBase64, 'base64'),
-      );
-    } catch {
-      supported = false;
-    }
+  try {
+    supported = dispatchVerify(
+      keyAlg,
+      kat.spkiBase64,
+      KAT_MESSAGE,
+      Buffer.from(kat.signatureBase64, 'base64'),
+    );
+  } catch {
+    supported = false;
   }
-  RUNTIME_SUPPORT_CACHE.set(keyAlg.name, supported);
+  RUNTIME_SUPPORT_CACHE.set(keyAlg, supported);
   return supported;
 }
 
@@ -278,11 +320,23 @@ export function describeUnsupportedAlgorithm(publicKeyBase64: string): string {
   if (!keyAlg.verifiable) {
     return `commits to ${keyAlg.name}, which this verifier build cannot compute. The chain is NOT verified; upgrade the verifier.`;
   }
+  if (runtimeCanCompute(keyAlg)) {
+    // No gap applies. Reached only by an external caller asking about a key
+    // that verifies fine here, so say that rather than inventing a refusal:
+    // this is exported API and its answer must not depend on the caller
+    // having checked the precondition first.
+    return `commits to ${keyAlg.name}, which this verifier build and this host can both compute. No algorithm gap applies to this key.`;
+  }
+  // The FIPS clause names a missing EdDSA implementation, so it belongs only
+  // to EdDSA. A FIPS provider carries ECDSA P-256 quite happily, and telling
+  // an ES256 auditor that EdDSA is absent sends them somewhere useless.
+  const cause =
+    isFipsActive() && keyAlg.name === 'Ed25519'
+      ? ' because the OpenSSL FIPS provider is active, and it carries no EdDSA.'
+      : '.';
   return (
     `commits to ${keyAlg.name}, which this verifier build supports but this HOST RUNTIME refused to compute` +
-    (isFipsActive()
-      ? ' because the OpenSSL FIPS provider is active, and it carries no EdDSA.'
-      : '.') +
+    cause +
     ' This is NOT tamper evidence: the signature was never checked, so the chain is neither verified nor refuted.' +
     ' Re-run the verification on a host without that restriction.'
   );
@@ -310,6 +364,12 @@ function isFipsActive(): boolean {
  * engine normalizes to low-S at sign time but, like the engine's verifier,
  * high-S is accepted here: ECDSA malleability changes the envelope bytes,
  * which the hash-link layer already pins.
+ *
+ * CAUTION for direct callers: `false` here means "did not verify" OR "this
+ * host cannot compute the algorithm", which are opposite conclusions.
+ * `verifyCoseSign1` gates on `runtimeCanCompute` before ever reaching this,
+ * so it never conflates them; anything calling this primitive directly must
+ * do the same check itself or risk reporting an intact signature as forged.
  */
 export function verifySignatureBytes(
   publicKeyBase64: string,

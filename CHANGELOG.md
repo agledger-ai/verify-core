@@ -4,7 +4,7 @@ All notable changes to `@agledger/verify-core` will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [1.4.0] - 2026-08-07
 
 ### Fixed
 
@@ -12,11 +12,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
   Verification now proves runtime capability before dispatching, by checking a fixed known-answer signature for the algorithm. When the runtime refuses, the outcome is `CHAIN_UNSUPPORTED_ALGORITHM` with `signature: 'unsupported'`, whose detail names the FIPS provider as the cause and says to re-run on an unrestricted host. Still fail-closed: an uncheckable chain is not a verified chain, and `valid` stays `false`. The known-answer vectors are fixed, self-contained bytes, so nothing in the audited export can influence whether a signature failure is reported as "not checked".
 
-  ES256 chains were never affected and still verify on a FIPS host, which is what makes the FIPS case worth distinguishing rather than blanket-failing.
+  The refusal is per algorithm, not blanket: a FIPS provider carries ECDSA P-256, so an ES256 chain is expected to verify on a host where an Ed25519 chain cannot. That is what makes the distinction worth drawing rather than failing everything. Note this expectation is reasoned from what the provider implements and is not yet measured on a real FIPS host; `crypto.setFips(true)` without a provider loaded is a degraded state that breaks unrelated primitives and cannot establish it either way.
 
 ### Added
 
-- **`runtimeCanCompute(keyAlgorithm)`** and **`describeUnsupportedAlgorithm(spkiBase64)`**, exported for consumers that build their own reports. `CHAIN_UNSUPPORTED_ALGORITHM` now covers two causes with different remedies (this build does not implement the algorithm, versus this host refuses to compute it), and `describeUnsupportedAlgorithm` produces the right sentence for each.
+- **`runtimeCanCompute(keyAlgorithm)`** and **`describeUnsupportedAlgorithm(spkiBase64)`**, exported for consumers that build their own reports. `CHAIN_UNSUPPORTED_ALGORITHM` now covers two causes with different remedies (this build does not implement the algorithm, versus this host refuses to compute it), and `describeUnsupportedAlgorithm` produces the right sentence for each. Both are safe to call without having established that a gap exists: `describeUnsupportedAlgorithm` says so plainly for a key that verifies fine, rather than asserting a refusal that did not happen, and `runtimeCanCompute` fails closed on a `KeyAlgorithm` that is not one of this build's own table entries without memoizing that answer.
 
 ### Changed
 

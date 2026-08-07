@@ -56,7 +56,23 @@ describe('runtimeCanCompute', () => {
   it('does not claim capability it cannot prove for a non-verifiable algorithm', () => {
     // ES384 has no KAT because this build cannot compute it. The build gate
     // (`verifiable: false`) is what stops it, and it must stop it first.
-    expect(algOf(spkiBase64(es384.publicKey)).verifiable).toBe(false);
+    const alg = algOf(spkiBase64(es384.publicKey));
+    expect(alg.verifiable).toBe(false);
+    expect(runtimeCanCompute(alg)).toBe(false);
+  });
+
+  it('fails closed on a fabricated KeyAlgorithm without poisoning the cache', () => {
+    // Exported API taking a structural type: a caller can hand it an object
+    // that is not one of the frozen table entries. It must not be believed,
+    // and above all must not overwrite the memoized answer that real
+    // verification depends on.
+    const forged = {
+      ...algOf(spkiBase64(ed.publicKey)),
+      nodeKeyType: 'ec' as const,
+      namedCurve: 'prime256v1',
+    };
+    expect(runtimeCanCompute(forged)).toBe(false);
+    expect(runtimeCanCompute(algOf(spkiBase64(ed.publicKey)))).toBe(true);
   });
 });
 
@@ -75,5 +91,15 @@ describe('describeUnsupportedAlgorithm', () => {
     const detail = describeUnsupportedAlgorithm('not-a-key');
     expect(detail).toContain('cannot compute');
     expect(detail).toContain('NOT verified');
+  });
+
+  it('does not invent a host refusal for an algorithm that works here', () => {
+    // This is exported, so it gets called without the caller having
+    // established that a gap exists. Asserting "this HOST RUNTIME refused to
+    // compute" about a healthy Ed25519 key would be flatly false.
+    const detail = describeUnsupportedAlgorithm(spkiBase64(ed.publicKey));
+    expect(detail).toContain('No algorithm gap applies');
+    expect(detail).not.toContain('refused to compute');
+    expect(detail).not.toContain('FIPS');
   });
 });
