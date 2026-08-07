@@ -23,6 +23,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 - **`CHAIN_SIGNATURE_INVALID`'s remediation text no longer hardcodes "Ed25519".** It has been wrong since ES256 verification landed in 1.2.0, and it compounded the bug above by naming the one algorithm that had not been computed.
 - **`CHAIN_UNSUPPORTED_ALGORITHM`'s remediation text** now names both causes, and states outright that the result is not tamper evidence.
 
+### Changed
+
+- **Remediation text no longer uses em-dashes.** `suggestion(code)` is read by auditors through the CLI, `@agledger/verify`, and the MCP tool; the text is now punctuated with periods and colons. Thirteen codes changed wording only, no verdict or code changed. The Python verifier mirrors these strings exactly and moved with them, and a test in `sdk-python` now fails if the two ever diverge again.
+
+### Documentation
+
+- **The README documents `algorithmByName`, `runtimeCanCompute`, and `describeUnsupportedAlgorithm`**, which 1.4.0 exports but 1.4.0's README never mentioned. It also states the one thing about them that is not guessable: `runtimeCanCompute` takes a `KeyAlgorithm` from this build's own table, so a caller must go through `algorithmByName('Ed25519')` first. Passing the string `'ed25519'` fails closed and returns `false`, which reads exactly like "this host cannot compute Ed25519" on a host that computes it fine.
+
+### Packaging
+
+- **Source maps are no longer published.** `dist/**/*.map` shipped with `sources` pointing at `../src/*.ts` and no `sourcesContent`, and `src/` is not in the tarball, so they resolved to nothing. Ten dead files removed.
+- **`bugs` added to package.json**, so npm links issues at the right repo.
+
 ## [1.3.0] - 2026-08-07
 
 ### Added (published API: widened union)

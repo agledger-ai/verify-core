@@ -84,21 +84,21 @@ const SUGGESTIONS: Record<FailureCode, string> = {
   CHAIN_EMPTY:
     'No entries were present to verify. Confirm the record id / dump directory is correct and that the chain has not been truncated to zero rows.',
   CHAIN_POSITION_GAP:
-    'A chain position is missing or out of order. The chain was truncated or reordered — obtain a complete, unmodified export/dump from the operator and re-run.',
+    'A chain position is missing or out of order. The chain was truncated or reordered. Obtain a complete, unmodified export/dump from the operator and re-run.',
   CHAIN_GENESIS_INVALID:
-    'The first entry must carry previousHash = null. A non-null genesis link means the head of the chain was removed — request the full chain from position 1.',
+    'The first entry must carry previousHash = null. A non-null genesis link means the head of the chain was removed. Request the full chain from position 1.',
   CHAIN_LINK_BROKEN:
-    'An entry\'s previousHash does not match the prior entry\'s payloadHash. The chain was edited between these two entries — treat every entry from this position on as untrusted.',
+    'An entry\'s previousHash does not match the prior entry\'s payloadHash. The chain was edited between these two entries. Treat every entry from this position on as untrusted.',
   CHAIN_HASH_MISMATCH:
-    'sha256(cose_sign1) does not equal the stored payloadHash. The envelope bytes or the stored hash were altered — the signed bytes are authoritative; the row was tampered with.',
+    'sha256(cose_sign1) does not equal the stored payloadHash. The envelope bytes or the stored hash were altered. The signed bytes are authoritative; the row was tampered with.',
   CHAIN_MALFORMED_ENTRY:
-    'An entry is missing a required field (coseSign1 or payloadHash). The export/dump is incomplete or corrupt — regenerate it.',
+    'An entry is missing a required field (coseSign1 or payloadHash). The export/dump is incomplete or corrupt. Regenerate it.',
   CHAIN_COSE_DECODE_FAILED:
-    'The COSE_Sign1 envelope did not decode as a tagged 4-element structure. The signed bytes are corrupt — regenerate the export/dump.',
+    'The COSE_Sign1 envelope did not decode as a tagged 4-element structure. The signed bytes are corrupt. Regenerate the export/dump.',
   CHAIN_COSE_HEADER_MISMATCH:
-    'The position/previousHash signed in the COSE protected header disagree with the row columns. The visible columns were renumbered after signing — trust the signed header, not the columns.',
+    'The position/previousHash signed in the COSE protected header disagree with the row columns. The visible columns were renumbered after signing. Trust the signed header, not the columns.',
   CHAIN_PAYLOAD_BINDING_MISMATCH:
-    'The signed payload\'s structure no longer matches the canonical projection of the row columns it is bound to — the visible (denormalised) payload was altered after signing. This is a binding-integrity failure, not a judgement on content.',
+    'The signed payload\'s structure no longer matches the canonical projection of the row columns it is bound to: the visible (denormalised) payload was altered after signing. This is a binding-integrity failure, not a judgement on content.',
   CHAIN_OIDC_ACTOR_MISMATCH:
     'The denormalised actor OIDC issuer/subject columns disagree with the identity signed in predicate.on_behalf_of. The actor columns were tampered with after signing.',
   CHAIN_SIGNATURE_INVALID:
@@ -118,15 +118,15 @@ const SUGGESTIONS: Record<FailureCode, string> = {
   CHAIN_SIGNING_KEY_DRIFT:
     'The entry\'s signingKeyId column names a different key than the signature-covered kid in the COSE protected header. The column is a denormalized convenience and was rewritten after signing (possibly to point verification at another key). Trust the signed kid; treat the row as tampered.',
   CHECKPOINT_ROW_MISSING:
-    'A signed checkpoint anchors a position that has no matching chain row. The chain was truncated below a checkpoint (out-of-band DELETE/TRUNCATE) — the checkpoint is proof of the missing rows.',
+    'A signed checkpoint anchors a position that has no matching chain row. The chain was truncated below a checkpoint (out-of-band DELETE/TRUNCATE). The checkpoint is proof of the missing rows.',
   CHECKPOINT_HASH_MISMATCH:
-    'A checkpoint\'s payloadHash does not match the chain row at its position. The chain diverged from what was checkpointed — treat the chain as tampered.',
+    'A checkpoint\'s payloadHash does not match the chain row at its position. The chain diverged from what was checkpointed. Treat the chain as tampered.',
   CHECKPOINT_SIGNATURE_INVALID:
-    'A checkpoint\'s COSE_Sign1 signature did not verify. The checkpoint was forged or altered — re-run with out-of-band verification keys.',
+    'A checkpoint\'s COSE_Sign1 signature did not verify. The checkpoint was forged or altered. Re-run with out-of-band verification keys.',
   TENANT_READ_LEAF_HASH_MISMATCH:
     'An org_admin_reads leaf hash does not match sha256(cose_sign1). The read-log leaf was altered after recording.',
   TENANT_READ_LEAF_INDEX_GAP:
-    'org_admin_reads leaf indices are not gap-free for this org. A read-log entry was removed — obtain the complete log.',
+    'org_admin_reads leaf indices are not gap-free for this org. A read-log entry was removed. Obtain the complete log.',
   TENANT_READ_SIGNATURE_INVALID:
     'An org_admin_reads leaf\'s COSE_Sign1 signature did not verify. The read-log leaf was forged or altered.',
   TENANT_CHECKPOINT_LEAF_COUNT_MISMATCH:
@@ -136,7 +136,7 @@ const SUGGESTIONS: Record<FailureCode, string> = {
   TENANT_CHECKPOINT_SIGNATURE_INVALID:
     'A signed-tree-head COSE_Sign1 signature did not verify. The STH was forged or altered.',
   TENANT_CHECKPOINT_FORK:
-    'Two signed tree heads at the same tree_size carry different roots. This is an engine fork or signing-key compromise — escalate immediately.',
+    'Two signed tree heads at the same tree_size carry different roots. This is an engine fork or signing-key compromise. Escalate immediately.',
 };
 
 /** The actionable next step for a failure code. */
