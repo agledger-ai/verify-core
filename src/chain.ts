@@ -121,9 +121,12 @@ export interface SignatureOutcome {
    * - `not-checked` — a structural/chain check failed at or before this entry,
    *   so verification short-circuited before reaching the signature. Reads as a
    *   consequence of an upstream break, never as a benign skip.
-   * - `unsupported`: the entry's trusted key commits to an algorithm this
-   *   build cannot compute (CHAIN_UNSUPPORTED_ALGORITHM). A failure state,
-   *   never a benign skip.
+   * - `unsupported`: the signature could not be computed at all, either
+   *   because this build does not implement the algorithm or because the host
+   *   runtime refused it (an active OpenSSL FIPS provider carries no EdDSA).
+   *   CHAIN_UNSUPPORTED_ALGORITHM. A failure state, never a benign skip, and
+   *   never tamper evidence: distinguishing it from `invalid` is the whole
+   *   point, since only `invalid` means a signature was checked and failed.
    */
   state: 'ok' | 'invalid' | 'unsigned' | 'skipped' | 'not-checked' | 'decode-fail' | 'unsupported';
   /** Provenance of the key the signature was checked against ('ok' / 'invalid'). */
