@@ -15,7 +15,7 @@
  * updated together; the conformance corpus (real engine output) is the
  * regression net that catches divergence.
  */
-import { createPublicKey, hash, verify } from 'node:crypto';
+import { createPublicKey, getFips, hash, verify } from 'node:crypto';
 import { decode as cborDecode, encode as cborEncode, rfc8949EncodeOptions } from 'cborg';
 
 // --- SHA-256 ---
@@ -153,6 +153,151 @@ export function verifyEd25519Bytes(
 // --- Key-dispatched signature verification (Ed25519 + ES256) ---
 
 /**
+ * Perform the actual verify() call for a resolved algorithm, WITHOUT catching.
+ *
+ * Split out from `verifySignatureBytes` so that two different failures stay
+ * distinguishable: a `false` return means the signature did not verify, while
+ * a throw means the host runtime could not perform the operation at all (see
+ * `runtimeCanCompute`). Collapsing those two into one boolean is what made a
+ * FIPS-locked host report an intact Ed25519 chain as forged (agents#113).
+ *
+ * ES256 mirrors the engine's `verifyWithAlgorithm`: SHA-256 digest passed
+ * positionally, `dsaEncoding: 'ieee-p1363'` (COSE raw r||s, 64 bytes). The
+ * engine normalizes to low-S at sign time but, like the engine's verifier,
+ * high-S is accepted here: ECDSA malleability changes the envelope bytes,
+ * which the hash-link layer already pins.
+ */
+function dispatchVerify(
+  keyAlg: KeyAlgorithm,
+  publicKeyBase64: string,
+  input: Uint8Array,
+  signature: Uint8Array,
+): boolean {
+  const keyObj = createPublicKey({
+    key: Buffer.from(publicKeyBase64, 'base64'),
+    format: 'der',
+    type: 'spki',
+  });
+  // Redundant with resolution from the same bytes, kept so a refactor that
+  // ever passes the algorithm in from elsewhere cannot reach Node's silent
+  // key-type-dispatched fallback (the api#1089 trap).
+  if (keyObj.asymmetricKeyType !== keyAlg.nodeKeyType) return false;
+  if (keyAlg.nodeKeyType === 'ec') {
+    if (keyObj.asymmetricKeyDetails?.namedCurve !== keyAlg.namedCurve) return false;
+    if (keyAlg.digest === null || keyAlg.dsaEncoding === null) return false;
+    return verify(keyAlg.digest, input, { key: keyObj, dsaEncoding: keyAlg.dsaEncoding }, signature);
+  }
+  return verify(null, input, keyObj, signature);
+}
+
+// --- Runtime algorithm capability (known-answer tests) ---
+
+/**
+ * Fixed (key, message, signature) triples, one per `verifiable` algorithm,
+ * generated once with this package's own dispatch and checked in.
+ *
+ * They exist to answer a question the algorithm table cannot: `verifiable`
+ * says what this BUILD implements, which is only half of whether a signature
+ * can be checked. The other half is whether the HOST RUNTIME will perform the
+ * operation, and a runtime can refuse. An active OpenSSL FIPS provider
+ * carries no EdDSA, so `verify()` throws
+ * ERR_OSSL_EVP_OPERATION_NOT_SUPPORTED_FOR_THIS_KEYTYPE for a perfectly good
+ * Ed25519 key.
+ *
+ * Deliberately fixed, self-contained bytes rather than a freshly generated
+ * keypair or anything read from the export under audit: promoting a signature
+ * failure to "not checked" is a security-relevant downgrade, so the signal
+ * that triggers it must be one no attacker can influence. Nothing in the
+ * audited data reaches this test.
+ */
+const KAT_MESSAGE = Buffer.from('AGLedger verifier runtime known-answer test', 'utf8');
+
+const ALGORITHM_KATS: Record<string, { spkiBase64: string; signatureBase64: string }> = {
+  Ed25519: {
+    spkiBase64: 'MCowBQYDK2VwAyEAjChcTn8MOj5h5PpKz/+MvHfomativmvfmC1zV5Sczfo=',
+    signatureBase64:
+      'iinDVfJ5uwoE4aWjLhunX340+yPlu4l2S8RFG+IfXqzWoiIXYL/ND7+ouGVzAnejozCErkL9GneR1sc3vY1sAg==',
+  },
+  ES256: {
+    spkiBase64:
+      'MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEEyJ40hViXjp41rIWYdbJT9bUHWVjYWpsOLKdc4F1L+c4reEK7WmCx1fI4sl0okBN/lNvhZT+0HZ44aUw5HKmFA==',
+    signatureBase64:
+      'eQ8fKfXT5GuBUz7gueqcq9hTmzrJlSuaoF/ukCPtKJsxqrynVgIREn/XMPKbdSHp7wMyFOEAgmbVfoMDnR5x/Q==',
+  },
+};
+
+/** One probe per algorithm per process; the answer cannot change mid-run. */
+const RUNTIME_SUPPORT_CACHE = new Map<string, boolean>();
+
+/**
+ * Whether the host runtime can actually compute `keyAlg`, proven by running
+ * this build's own dispatch against a known-good signature.
+ *
+ * A throw and a `false` are treated identically: either way the runtime just
+ * failed to confirm a signature known to be valid, so it cannot be trusted to
+ * tell a good signature from a forged one. Fail closed, and callers must
+ * surface this as "NOT verified, verify elsewhere", never as a pass and never
+ * as tamper evidence.
+ */
+export function runtimeCanCompute(keyAlg: KeyAlgorithm): boolean {
+  const cached = RUNTIME_SUPPORT_CACHE.get(keyAlg.name);
+  if (cached !== undefined) return cached;
+  const kat = ALGORITHM_KATS[keyAlg.name];
+  let supported: boolean;
+  if (!kat) {
+    // A verifiable algorithm with no KAT is a packaging error, not a runtime
+    // gap. Do not silently downgrade real verification to "unsupported".
+    supported = true;
+  } else {
+    try {
+      supported = dispatchVerify(
+        keyAlg,
+        kat.spkiBase64,
+        KAT_MESSAGE,
+        Buffer.from(kat.signatureBase64, 'base64'),
+      );
+    } catch {
+      supported = false;
+    }
+  }
+  RUNTIME_SUPPORT_CACHE.set(keyAlg.name, supported);
+  return supported;
+}
+
+/**
+ * Human-readable reason an algorithm could not be computed, for the detail
+ * line of CHAIN_UNSUPPORTED_ALGORITHM. Distinguishes the two causes that share
+ * that failure code, because they have different remedies: upgrade the
+ * verifier, versus re-run somewhere the algorithm is permitted.
+ */
+export function describeUnsupportedAlgorithm(publicKeyBase64: string): string {
+  const keyAlg = resolveKeyAlgorithm(publicKeyBase64);
+  if (typeof keyAlg !== 'object') {
+    return 'commits to an algorithm this verifier build cannot compute. The chain is NOT verified; upgrade the verifier.';
+  }
+  if (!keyAlg.verifiable) {
+    return `commits to ${keyAlg.name}, which this verifier build cannot compute. The chain is NOT verified; upgrade the verifier.`;
+  }
+  return (
+    `commits to ${keyAlg.name}, which this verifier build supports but this HOST RUNTIME refused to compute` +
+    (isFipsActive()
+      ? ' because the OpenSSL FIPS provider is active, and it carries no EdDSA.'
+      : '.') +
+    ' This is NOT tamper evidence: the signature was never checked, so the chain is neither verified nor refuted.' +
+    ' Re-run the verification on a host without that restriction.'
+  );
+}
+
+/** Best-effort FIPS detection, used only to explain a failure, never to gate one. */
+function isFipsActive(): boolean {
+  try {
+    return getFips() === 1;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Verify a raw signature under whatever algorithm the TRUSTED key commits to.
  * Generalizes `verifyEd25519Bytes`: the algorithm is resolved from the SPKI
  * key material, never from any header, and only `verifiable` table entries
@@ -174,21 +319,7 @@ export function verifySignatureBytes(
   const keyAlg = resolveKeyAlgorithm(publicKeyBase64);
   if (typeof keyAlg !== 'object' || !keyAlg.verifiable) return false;
   try {
-    const keyObj = createPublicKey({
-      key: Buffer.from(publicKeyBase64, 'base64'),
-      format: 'der',
-      type: 'spki',
-    });
-    // Redundant with resolution from the same bytes, kept so a refactor that
-    // ever passes the algorithm in from elsewhere cannot reach Node's silent
-    // key-type-dispatched fallback (the api#1089 trap).
-    if (keyObj.asymmetricKeyType !== keyAlg.nodeKeyType) return false;
-    if (keyAlg.nodeKeyType === 'ec') {
-      if (keyObj.asymmetricKeyDetails?.namedCurve !== keyAlg.namedCurve) return false;
-      if (keyAlg.digest === null || keyAlg.dsaEncoding === null) return false;
-      return verify(keyAlg.digest, input, { key: keyObj, dsaEncoding: keyAlg.dsaEncoding }, signature);
-    }
-    return verify(null, input, keyObj, signature);
+    return dispatchVerify(keyAlg, publicKeyBase64, input, signature);
   } catch {
     return false;
   }
@@ -300,7 +431,10 @@ export function verifyCoseSign1(
 
   const headerAlg = extractHeaderAlg(parts.protectedBstr);
   if (headerAlg === null || !keyAlg.coseAlgs.includes(headerAlg)) return 'alg-mismatch';
-  if (!keyAlg.verifiable) return 'unsupported-key-algorithm';
+  // Two independent reasons the signature cannot be checked: this build does
+  // not implement the algorithm, or the host runtime refuses to compute it
+  // (agents#113). Both must read as "not verified", never as "did not verify".
+  if (!keyAlg.verifiable || !runtimeCanCompute(keyAlg)) return 'unsupported-key-algorithm';
 
   if (
     parts.signature.length === keyAlg.signatureLength &&

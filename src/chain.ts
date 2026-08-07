@@ -33,6 +33,7 @@ import {
   decodeCoseSign1,
   decodePredicate,
   deepEqual,
+  describeUnsupportedAlgorithm,
   extractChainClaim,
   extractKid,
   extractOnBehalfOfClaim,
@@ -496,7 +497,7 @@ function verifyEntry(
       scopeId,
       expectedPosition,
       'CHAIN_UNSUPPORTED_ALGORITHM',
-      `Key ${entry.signingKeyId} commits to an algorithm this verifier build cannot compute. The chain is NOT verified; upgrade the verifier.`,
+      `Key ${entry.signingKeyId} ${describeUnsupportedAlgorithm(key.spkiBase64)}`,
       'unsupported',
     );
   }

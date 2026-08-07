@@ -102,7 +102,7 @@ const SUGGESTIONS: Record<FailureCode, string> = {
   CHAIN_OIDC_ACTOR_MISMATCH:
     'The denormalised actor OIDC issuer/subject columns disagree with the identity signed in predicate.on_behalf_of. The actor columns were tampered with after signing.',
   CHAIN_SIGNATURE_INVALID:
-    'The Ed25519 COSE_Sign1 signature did not verify against the entry\'s signing key. The entry was forged or altered — obtain the verification keys out of band and re-run.',
+    'The COSE_Sign1 signature did not verify against the entry\'s signing key, under the algorithm that key commits to. The entry was forged or altered: obtain the verification keys out of band and re-run.',
   CHAIN_SIGNATURE_MISSING_KEY:
     'No public key was available for the entry\'s signingKeyId. Supply the key out of band (GET /v1/verification-keys or /.well-known/scitt-keys) and re-run.',
   CHAIN_KEY_POLICY_VIOLATION:
@@ -114,7 +114,7 @@ const SUGGESTIONS: Record<FailureCode, string> = {
   CHAIN_ALG_MISMATCH:
     'The algorithm in the signed protected header (label 1) is not one the entry\'s trusted verification key can produce, or the key registry\'s declared algorithm contradicts the key material itself. Tamper class: the header alg or the key registry was rewritten. Treat the entry as forged; obtain the verification keys out of band and re-run.',
   CHAIN_UNSUPPORTED_ALGORITHM:
-    'The entry\'s trusted verification key commits to a signature algorithm this verifier build cannot compute. The chain is NOT verified: upgrade to a verifier version that supports the algorithm and re-run. Never treat this result as a pass.',
+    'The entry\'s trusted verification key commits to a signature algorithm that could not be computed, either because this verifier build does not implement it or because the host runtime refused it (an active OpenSSL FIPS provider carries no EdDSA). The chain is NOT verified, and this is NOT tamper evidence: the signature was never checked. Upgrade the verifier, or re-run on a host without the restriction. Never treat this result as a pass.',
   CHAIN_SIGNING_KEY_DRIFT:
     'The entry\'s signingKeyId column names a different key than the signature-covered kid in the COSE protected header. The column is a denormalized convenience and was rewritten after signing (possibly to point verification at another key). Trust the signed kid; treat the row as tampered.',
   CHECKPOINT_ROW_MISSING:

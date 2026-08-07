@@ -47,6 +47,20 @@ if (!result.valid) {
   matched verification key, under the algorithm its SPKI commits to (Ed25519
   or ES256; anything else fails closed as `CHAIN_UNSUPPORTED_ALGORITHM`).
 
+## Verifying on a FIPS-locked host
+
+This package has no crypto of its own: it verifies through the host's Node
+runtime. An active OpenSSL FIPS provider carries no EdDSA, so **an Ed25519
+chain cannot be verified on a FIPS-locked host**. ES256 chains can.
+
+That is reported as `CHAIN_UNSUPPORTED_ALGORITHM`, never as a signature
+failure. The distinction is the whole point: "I could not check this" and "I
+checked this and it failed" lead to opposite conclusions, and only one of them
+is grounds for a tamper investigation. The result still fails closed, because
+an unverified chain is not a verified one. To actually verify an Ed25519 chain,
+re-run on a host without the restriction; the export and keys are portable and
+the verification is entirely offline, so this costs nothing but a second host.
+
 ## Out-of-band keys
 
 `options.publicKeys` accepts either of two shapes:

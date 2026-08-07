@@ -4,6 +4,25 @@ All notable changes to `@agledger/verify-core` will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+
+- **A runtime that cannot compute an algorithm no longer reads as tamper.** With the OpenSSL FIPS provider active there is no EdDSA, so Node's `verify()` throws `ERR_OSSL_EVP_OPERATION_NOT_SUPPORTED_FOR_THIS_KEYTYPE` for a perfectly good Ed25519 key. That throw was caught and returned as `false`, which is indistinguishable from a signature that genuinely did not verify, so a FIPS-locked auditor verifying an intact chain got `0/N verified` and `CHAIN_SIGNATURE_INVALID` on every entry: the most alarming thing this package can say, about a chain that is fine (agents#113).
+
+  Verification now proves runtime capability before dispatching, by checking a fixed known-answer signature for the algorithm. When the runtime refuses, the outcome is `CHAIN_UNSUPPORTED_ALGORITHM` with `signature: 'unsupported'`, whose detail names the FIPS provider as the cause and says to re-run on an unrestricted host. Still fail-closed: an uncheckable chain is not a verified chain, and `valid` stays `false`. The known-answer vectors are fixed, self-contained bytes, so nothing in the audited export can influence whether a signature failure is reported as "not checked".
+
+  ES256 chains were never affected and still verify on a FIPS host, which is what makes the FIPS case worth distinguishing rather than blanket-failing.
+
+### Added
+
+- **`runtimeCanCompute(keyAlgorithm)`** and **`describeUnsupportedAlgorithm(spkiBase64)`**, exported for consumers that build their own reports. `CHAIN_UNSUPPORTED_ALGORITHM` now covers two causes with different remedies (this build does not implement the algorithm, versus this host refuses to compute it), and `describeUnsupportedAlgorithm` produces the right sentence for each.
+
+### Changed
+
+- **`CHAIN_SIGNATURE_INVALID`'s remediation text no longer hardcodes "Ed25519".** It has been wrong since ES256 verification landed in 1.2.0, and it compounded the bug above by naming the one algorithm that had not been computed.
+- **`CHAIN_UNSUPPORTED_ALGORITHM`'s remediation text** now names both causes, and states outright that the result is not tamper evidence.
+
 ## [1.3.0] - 2026-08-07
 
 ### Added (published API: widened union)
