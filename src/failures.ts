@@ -29,8 +29,12 @@
  *                                only) splits out to CHAIN_KEY_POLICY_VIOLATION so
  *                                a retired/wrong-key policy hit is alertable apart
  *                                from a benign missing key.
- *   - CHAIN_KEY_EXPIRED (new)  temporal key-validity: entry signed outside the
- *                                signing key's activated_at..retired_at window.
+ *   - CHAIN_KEY_EXPIRED (new)  temporal key-validity: entry written after the
+ *                                signing key's retired_at.
+ *   - CHAIN_KEY_NOT_YET_ACTIVE  entry written before the key's activated_at.
+ *                                Split from CHAIN_KEY_EXPIRED so a consumer is
+ *                                not told "expired" about a key that had not
+ *                                started yet (agents#112).
  *   - CHAIN_EMPTY (new)        a chain/vault with nothing to verify is a non-clean
  *                                verdict, never a silent pass.
  */
@@ -53,6 +57,7 @@ export type FailureCode =
   | 'CHAIN_SIGNATURE_MISSING_KEY'
   | 'CHAIN_KEY_POLICY_VIOLATION'
   | 'CHAIN_KEY_EXPIRED'
+  | 'CHAIN_KEY_NOT_YET_ACTIVE'
   | 'CHAIN_ALG_MISMATCH'
   | 'CHAIN_UNSUPPORTED_ALGORITHM'
   | 'CHAIN_SIGNING_KEY_DRIFT'
@@ -103,7 +108,9 @@ const SUGGESTIONS: Record<FailureCode, string> = {
   CHAIN_KEY_POLICY_VIOLATION:
     'The entry\'s signing key violates the caller\'s trust policy (requireKeyId, or out-of-band keys required). Re-run with the expected key id, or with keys obtained out of band rather than the engine-embedded set.',
   CHAIN_KEY_EXPIRED:
-    'The entry was signed outside its signing key\'s activated..retired window. A retired or not-yet-active key produced this entry — possible use of a compromised retired key.',
+    'The entry was written AFTER its signing key was retired. Possible use of a compromised retired key: check the key rotation and retention record for that key id.',
+  CHAIN_KEY_NOT_YET_ACTIVE:
+    'The entry was written BEFORE its signing key was activated. Not a rotation problem: the usual causes are a backdated entry or clock skew between the signer and the key registry. Compare the entry write time against the key activation time before treating this as tamper.',
   CHAIN_ALG_MISMATCH:
     'The algorithm in the signed protected header (label 1) is not one the entry\'s trusted verification key can produce, or the key registry\'s declared algorithm contradicts the key material itself. Tamper class: the header alg or the key registry was rewritten. Treat the entry as forged; obtain the verification keys out of band and re-run.',
   CHAIN_UNSUPPORTED_ALGORITHM:

@@ -4,6 +4,14 @@ All notable changes to `@agledger/verify-core` will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.3.0] - 2026-08-07
+
+### Added (published API: widened union)
+
+- **`CHAIN_KEY_NOT_YET_ACTIVE`**, for an entry written BEFORE its signing key's activation. Both directions of the temporal key-window check previously reported `CHAIN_KEY_EXPIRED`, so a consumer branching on the code was told "expired" about a key that had not started yet and would go looking at rotation or retention when the real condition is a backdated entry or clock skew. Those are different investigations, and the activation direction is the security-relevant one. `CHAIN_KEY_EXPIRED` now means only the retirement side, and both explanations were rewritten to say which direction they describe (agents#112).
+
+  `FailureCode` gains a member, so an exhaustive switch over it needs the new case. Verification verdicts are unchanged: an entry that failed before still fails, only the code on the activation side differs.
+
 ## [1.2.0] - 2026-08-05
 
 Signing-agility wave 2: this build now verifies ES256 chains. Engines older than api R2 are unaffected; Ed25519 chains verify byte-identically to 1.1.1.

@@ -457,9 +457,9 @@ function verifyEntry(
   // entry write time are present (dump path).
   if (entry.createdAt && (key.activatedAt || key.retiredAt)) {
     optionalChecks.key_temporal = 'applied';
-    const expiredDetail = temporalKeyFailure(entry.createdAt, key);
-    if (expiredDetail) {
-      return fail(scopeId, expectedPosition, 'CHAIN_KEY_EXPIRED', expiredDetail);
+    const temporal = temporalKeyFailure(entry.createdAt, key);
+    if (temporal) {
+      return fail(scopeId, expectedPosition, temporal.code, temporal.detail);
     }
   }
 
@@ -555,19 +555,36 @@ function checkOidcActor(
   return null;
 }
 
-function temporalKeyFailure(createdAt: string, key: VerificationKey): string | null {
+/**
+ * Temporal key-validity, split by direction. Both directions used to report
+ * `CHAIN_KEY_EXPIRED`, so a consumer branching on the code saw "expired" for a
+ * key that had not started yet and would reason about rotation or retention
+ * when the real condition is clock skew or backdating. Those are different
+ * investigations, and the activation side is the security-relevant one
+ * (agents#112).
+ */
+function temporalKeyFailure(
+  createdAt: string,
+  key: VerificationKey,
+): { code: 'CHAIN_KEY_NOT_YET_ACTIVE' | 'CHAIN_KEY_EXPIRED'; detail: string } | null {
   const written = Date.parse(createdAt);
   if (Number.isNaN(written)) return null;
   if (key.activatedAt) {
     const activated = Date.parse(key.activatedAt);
     if (!Number.isNaN(activated) && written < activated) {
-      return `Entry written ${createdAt} predates key ${key.keyId} activation ${key.activatedAt}.`;
+      return {
+        code: 'CHAIN_KEY_NOT_YET_ACTIVE',
+        detail: `Entry written ${createdAt} predates key ${key.keyId} activation ${key.activatedAt}.`,
+      };
     }
   }
   if (key.retiredAt) {
     const retired = Date.parse(key.retiredAt);
     if (!Number.isNaN(retired) && written > retired) {
-      return `Entry written ${createdAt} postdates key ${key.keyId} retirement ${key.retiredAt}.`;
+      return {
+        code: 'CHAIN_KEY_EXPIRED',
+        detail: `Entry written ${createdAt} postdates key ${key.keyId} retirement ${key.retiredAt}.`,
+      };
     }
   }
   return null;
