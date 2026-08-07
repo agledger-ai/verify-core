@@ -109,9 +109,10 @@ describe('export-path optional checks (Pass-2 wire parity)', () => {
     expect(result.optionalChecks.oidc_actor).toBe('applied');
   });
 
-  it('catches temporal-key violations on the export path when the wire carries windows', () => {
-    // Move the key's activation forward so every entry's createdAt predates
-    // it → CHAIN_KEY_EXPIRED at position 1.
+  // agents#112: the two directions carry different codes. Both used to report
+  // CHAIN_KEY_EXPIRED, which sent a consumer investigating rotation when the
+  // real condition was a backdated entry or clock skew.
+  it('reports CHAIN_KEY_NOT_YET_ACTIVE when entries predate key activation', () => {
     const exp = loadValid();
     const [keyId] = Object.keys(exp.exportMetadata.signingKeyWindows ?? {});
     if (!keyId) throw new Error('fixture must carry signingKeyWindows');
@@ -120,7 +121,22 @@ describe('export-path optional checks (Pass-2 wire parity)', () => {
     };
     const result = verifyAuditExport(exp);
     expect(result.valid).toBe(false);
+    expect(result.brokenAt?.code).toBe('CHAIN_KEY_NOT_YET_ACTIVE');
+    expect(result.brokenAt?.detail).toContain('predates key');
+    expect(result.optionalChecks.key_temporal).toBe('applied');
+  });
+
+  it('reports CHAIN_KEY_EXPIRED when entries postdate key retirement', () => {
+    const exp = loadValid();
+    const [keyId] = Object.keys(exp.exportMetadata.signingKeyWindows ?? {});
+    if (!keyId) throw new Error('fixture must carry signingKeyWindows');
+    exp.exportMetadata.signingKeyWindows = {
+      [keyId]: { activatedAt: '2000-01-01T00:00:00Z', retiredAt: '2000-01-02T00:00:00Z' },
+    };
+    const result = verifyAuditExport(exp);
+    expect(result.valid).toBe(false);
     expect(result.brokenAt?.code).toBe('CHAIN_KEY_EXPIRED');
+    expect(result.brokenAt?.detail).toContain('postdates key');
     expect(result.optionalChecks.key_temporal).toBe('applied');
   });
 });
