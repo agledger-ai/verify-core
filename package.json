@@ -17,6 +17,7 @@
   },
   "files": [
     "dist",
+    "!dist/**/*.map",
     "LICENSE",
     "README.md"
   ],
@@ -45,6 +46,9 @@
   "repository": {
     "type": "git",
     "url": "git+https://github.com/agledger-ai/verify-core.git"
+  },
+  "bugs": {
+    "url": "https://github.com/agledger-ai/verify-core/issues"
   },
   "publishConfig": {
     "access": "public"

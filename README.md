@@ -61,6 +61,33 @@ an unverified chain is not a verified one. To actually verify an Ed25519 chain,
 re-run on a host without the restriction; the export and keys are portable and
 the verification is entirely offline, so this costs nothing but a second host.
 
+### Asking about an algorithm directly
+
+`CHAIN_UNSUPPORTED_ALGORITHM` covers two causes with different remedies (this
+build does not implement the algorithm, versus this host refuses to compute it),
+so a consumer writing its own report can ask about either:
+
+```ts
+import { algorithmByName, runtimeCanCompute, describeUnsupportedAlgorithm } from '@agledger/verify-core';
+
+// runtimeCanCompute takes a KeyAlgorithm from this build's table, NOT a name
+// string. Look one up with algorithmByName ('Ed25519', 'ES256', 'ES384',
+// 'ES512', 'ES256K'); it returns null for anything else.
+const ed25519 = algorithmByName('Ed25519');
+if (ed25519 && !runtimeCanCompute(ed25519)) {
+  console.warn('This host cannot verify Ed25519 chains.');
+}
+
+// Or ask about a specific key, given its SPKI DER base64. Safe to call without
+// having established that a gap exists: a key that verifies fine here says so
+// rather than asserting a refusal that did not happen.
+console.log(describeUnsupportedAlgorithm(spkiBase64));
+```
+
+`algorithmByName` exists for the case `resolveKeyAlgorithm` cannot serve: a host
+that refuses to *load* a key of some algorithm produces no key object to
+resolve, which is exactly when the question matters most.
+
 ## Out-of-band keys
 
 `options.publicKeys` accepts either of two shapes:
