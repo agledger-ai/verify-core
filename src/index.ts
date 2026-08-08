@@ -42,6 +42,7 @@ export {
   resolveKeyAlgorithm,
   algorithmByName,
   runtimeCanCompute,
+  looksLikeEd25519Key,
   describeUnsupportedAlgorithm,
   decodeCoseSign1,
   verifyCoseSign1,
