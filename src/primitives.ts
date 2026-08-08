@@ -97,6 +97,49 @@ export function algorithmByName(name: string): KeyAlgorithm | null {
   return null;
 }
 
+/**
+ * SPKI DER prefix for an Ed25519 public key: SEQUENCE(44) { SEQUENCE(5) {
+ * OID 1.3.101.112 } BIT STRING(33) }. RFC 8410 fixes the whole structure, so an
+ * Ed25519 SPKI is always these 12 bytes followed by the 32-byte key.
+ */
+const ED25519_SPKI_PREFIX = Buffer.from('302a300506032b6570032100', 'hex');
+const ED25519_SPKI_LENGTH = 44;
+
+/**
+ * Whether these bytes DECLARE themselves an Ed25519 public key, judged without
+ * asking node:crypto to load them.
+ *
+ * Needed because a host that refuses EdDSA refuses at KEY LOAD, not only at
+ * verify: with the OpenSSL FIPS provider active, `createPublicKey` throws
+ * "Failed to read asymmetric key" and there is no key object left to resolve an
+ * algorithm from. Reading the OID separates "this is an Ed25519 key my runtime
+ * will not touch" from "these are garbage bytes", which is the difference
+ * between an environment problem and tamper. Structure only: it says nothing
+ * about whether the key is valid, trusted, or the right one.
+ *
+ * Byte-identical to the Python verifier's `looks_like_ed25519_key`, so the two
+ * implementations classify the same bytes the same way.
+ */
+export function looksLikeEd25519Key(spkiDer: Uint8Array): boolean {
+  if (spkiDer.length !== ED25519_SPKI_LENGTH) return false;
+  return Buffer.from(spkiDer).subarray(0, ED25519_SPKI_PREFIX.length).equals(ED25519_SPKI_PREFIX);
+}
+
+/**
+ * The narrow case where a key that would not LOAD must not read as tamper: the
+ * bytes declare Ed25519 by OID and this host cannot compute Ed25519 at all.
+ *
+ * Judged from the OID rather than from capability alone, so genuinely tampered
+ * key material still reads as tamper on every host, and both verifiers agree on
+ * garbage bytes. On a host that CAN compute Ed25519 this is always false, so an
+ * unloadable key there stays a signature failure exactly as before.
+ */
+function isRuntimeRefusedEd25519Key(publicKeyBase64: string): boolean {
+  const ed = KEY_ALGORITHMS['ed25519'];
+  if (!ed) return false;
+  return looksLikeEd25519Key(Buffer.from(publicKeyBase64, 'base64')) && !runtimeCanCompute(ed);
+}
+
 /** Small memo: a registry holds a handful of keys but chains hold millions of entries. */
 const KEY_ALG_CACHE = new Map<string, KeyAlgorithm | 'unparseable' | 'unrecognized'>();
 const KEY_ALG_CACHE_MAX = 256;
@@ -314,6 +357,13 @@ export function runtimeCanCompute(keyAlg: KeyAlgorithm): boolean {
  */
 export function describeUnsupportedAlgorithm(publicKeyBase64: string): string {
   const keyAlg = resolveKeyAlgorithm(publicKeyBase64);
+  // Same reachability trap as `verifyCoseSign1`: on the host this sentence
+  // exists for, the key never loaded, so there is no algorithm to resolve and
+  // the generic "upgrade the verifier" text would send an auditor after a build
+  // that is fine. Answer from the OID instead.
+  if (typeof keyAlg !== 'object' && isRuntimeRefusedEd25519Key(publicKeyBase64)) {
+    return describeRuntimeRefusal(KEY_ALGORITHMS['ed25519']!);
+  }
   if (typeof keyAlg !== 'object') {
     return 'commits to an algorithm this verifier build cannot compute. The chain is NOT verified; upgrade the verifier.';
   }
@@ -327,6 +377,11 @@ export function describeUnsupportedAlgorithm(publicKeyBase64: string): string {
     // having checked the precondition first.
     return `commits to ${keyAlg.name}, which this verifier build and this host can both compute. No algorithm gap applies to this key.`;
   }
+  return describeRuntimeRefusal(keyAlg);
+}
+
+/** The host-refused-this-algorithm sentence, shared by both ways of reaching it. */
+function describeRuntimeRefusal(keyAlg: KeyAlgorithm): string {
   // The FIPS clause names a missing EdDSA implementation, so it belongs only
   // to EdDSA. A FIPS provider carries ECDSA P-256 quite happily, and telling
   // an ES256 auditor that EdDSA is absent sends them somewhere useless.
@@ -486,7 +541,16 @@ export function verifyCoseSign1(
   const keyAlg = resolveKeyAlgorithm(publicKeyBase64);
   // A key that does not parse can verify nothing; preserve the historical
   // 'invalid' rather than misreporting garbage bytes as an algorithm gap.
-  if (keyAlg === 'unparseable') return 'invalid';
+  //
+  // One exception, and it is deliberately narrow: bytes that DECLARE themselves
+  // an Ed25519 key (by OID) on a host that cannot compute EdDSA. A FIPS-locked
+  // runtime refuses such a key at LOAD, so "did not parse" there means "this
+  // host will not touch it", not "someone forged it". Without this, the whole
+  // agents#113 capability gate below is unreachable on the one path it was
+  // written for, and an intact chain still reads as tamper.
+  if (keyAlg === 'unparseable') {
+    return isRuntimeRefusedEd25519Key(publicKeyBase64) ? 'unsupported-key-algorithm' : 'invalid';
+  }
   if (keyAlg === 'unrecognized') return 'unsupported-key-algorithm';
 
   const headerAlg = extractHeaderAlg(parts.protectedBstr);
