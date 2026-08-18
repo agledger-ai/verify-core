@@ -18,6 +18,17 @@ one surface passes identically in all of them.
 One dependency: [`cborg`](https://www.npmjs.com/package/cborg), for COSE_Sign1
 CBOR decoding.
 
+## Install
+
+```bash
+npm install @agledger/verify-core
+```
+
+Node 24 or newer. If you want a ready-made verifier rather than a library, use
+[`@agledger/verify`](https://github.com/agledger-ai/verify) for a full-vault dump
+or the `verify` command in [`@agledger/cli`](https://github.com/agledger-ai/cli)
+for a single record export.
+
 ## Usage
 
 ```ts
