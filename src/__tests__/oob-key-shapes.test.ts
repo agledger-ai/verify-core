@@ -9,7 +9,7 @@ import type { RecordAuditExportInput } from '../audit-export.js';
  * F-698 regression: `options.publicKeys` accepts BOTH the compact
  * `Record<keyId, b64SPKI>` shape AND the SDK-natural `VerificationKey[]`
  * shape (the .data list from `client.verificationKeys.list()`). A wrong
- * shape must throw `TypeError` at the boundary — never silently fall
+ * shape must throw `TypeError` at the boundary, never silently fall
  * through to the export's embedded keys, which would lie about the
  * audit-independence claim (`keyProvenance.outOfBand === 0` with `valid: true`).
  */
@@ -91,14 +91,14 @@ describe('F-698 temporal axis: signingKeyWindows must not clobber OOB keys', () 
     const keyId = Object.keys(map)[0]!;
     // Pre-condition: the valid fixture carries signingKeyWindows for this
     // keyId with retiredAt:null. If it ever stops, this test is no longer
-    // exercising the clobber bug — make sure the fixture still triggers it.
+    // exercising the clobber bug; make sure the fixture still triggers it.
     const exportWindow = exp.exportMetadata?.signingKeyWindows?.[keyId];
     expect(exportWindow).toBeDefined();
     expect(exportWindow?.retiredAt).toBeNull();
     // Auditor's OOB anchor says the key was retired before the entries were
     // signed. Without the fix, the export's signingKeyWindows would overwrite
     // this and key_temporal passes. With the fix, the OOB window sticks and
-    // CHAIN_KEY_EXPIRED fires — the audit-independence claim survives.
+    // CHAIN_KEY_EXPIRED fires, so the audit-independence claim survives.
     const result = verifyAuditExport(exp, {
       publicKeys: [
         {

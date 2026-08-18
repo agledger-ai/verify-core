@@ -1,5 +1,5 @@
 /**
- * @agledger/verify-core — shared offline verification core for AGLedger audit
+ * @agledger/verify-core: shared offline verification core for AGLedger audit
  * chains. One dependency (cborg), no network. The SDK /verify subpath, the CLI,
  * the MCP server, and @agledger/verify all build on this single body of logic.
  */

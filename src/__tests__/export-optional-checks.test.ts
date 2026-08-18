@@ -70,7 +70,7 @@ describe('export-path optional checks (Pass-2 wire parity)', () => {
   it('legacy exports without the new fields keep all three optional checks skipped', () => {
     // Strip the wire fields a pre-v0.26 export would lack. The chain still
     // verifies (always-run checks are unchanged); the optional checks must NOT
-    // flip to applied — otherwise older exports would silently fail the new
+    // flip to applied; otherwise older exports would silently fail the new
     // dump-only checks they were never expected to satisfy.
     const exp = loadValid();
     delete exp.exportMetadata.signingKeyWindows;

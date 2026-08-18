@@ -35,7 +35,7 @@ function withNulledKeyAtPosition2(): RecordAuditExportInput {
 
 /**
  * The signing-key id the real corpus uses on its signed entries. Derived from
- * the fixture (the engine mints it as a key fingerprint), not hardcoded — so
+ * the fixture (the engine mints it as a key fingerprint), not hardcoded, so
  * regenerating the corpus with a new vault key doesn't break this guard.
  */
 function corpusKeyId(): string {

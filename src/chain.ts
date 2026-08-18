@@ -2,7 +2,7 @@
  * The shared per-chain verification walk.
  *
  * This is the single body of logic the SDK /verify, CLI, MCP server, and
- * @agledger/verify all run — replacing four hand-vendored copies. It walks ONE
+ * @agledger/verify all run, replacing four hand-vendored copies. It walks ONE
  * hash chain (a single record's lifecycle, or a single per-org schema-event
  * chain) over a normalized entry shape and emits the canonical failure
  * taxonomy.
@@ -15,13 +15,13 @@
  *   - ALWAYS-RUN (every surface): position monotonicity, payloadHash =
  *     sha256(cose_sign1), previous-hash link, COSE_Sign1 decode, the signed
  *     protected-header chain-claim cross-check, and the Ed25519 signature.
- *   - INPUT-GATED (only when the normalized entry carries the inputs — i.e. the
+ *   - INPUT-GATED (only when the normalized entry carries the inputs, i.e. the
  *     dump path): binding-integrity, OIDC-actor cross-check, temporal
  *     key-validity. The `/audit-export` wire does NOT carry the inputs these
  *     need (the API re-projects the export payload from the signed bytes and
  *     omits the synthesized flag), so running them there would either no-op
  *     silently or compare signed bytes to a derivative of themselves. They are
- *     therefore reported as `skipped_no_input` on the export path — NEVER folded
+ *     therefore reported as `skipped_no_input` on the export path, NEVER folded
  *     into a green verdict.
  *
  * Failure ordering is fixed so `brokenAt` is deterministic. The null-key
@@ -44,7 +44,7 @@ import {
 } from './primitives.js';
 import type { FailureCode } from './failures.js';
 
-/** Where a verification key came from — the trust-anchor provenance. */
+/** Where a verification key came from: the trust-anchor provenance. */
 export type KeySource = 'out-of-band' | 'embedded';
 
 /** A public key the walk can verify signatures against. */
@@ -84,7 +84,7 @@ export function buildKeyRegistry(keys: readonly VerificationKey[]): KeyRegistry 
 
 /** Inputs the input-gated checks consume; present only on the dump path. */
 export interface NormalizedEntry {
-  /** Identity for messages — recordId (export) or chainKey (dump). */
+  /** Identity for messages: recordId (export) or chainKey (dump). */
   scopeId: string;
   chainPosition: number;
   payloadHash: string;
@@ -113,12 +113,12 @@ export type CheckApplicability = 'applied' | 'skipped_no_input';
 
 export interface SignatureOutcome {
   /**
-   * - `ok` / `invalid` / `decode-fail` — the signature was checked (and passed,
+   * - `ok` / `invalid` / `decode-fail`: the signature was checked (and passed,
    *   failed, or the envelope would not decode).
-   * - `unsigned` — the entry carries no signature by design.
-   * - `skipped` — the chain is intact but this entry has no signing key, so the
+   * - `unsigned`: the entry carries no signature by design.
+   * - `skipped`: the chain is intact but this entry has no signing key, so the
    *   signature check was deliberately not run (engine booted without a key).
-   * - `not-checked` — a structural/chain check failed at or before this entry,
+   * - `not-checked`: a structural/chain check failed at or before this entry,
    *   so verification short-circuited before reaching the signature. Reads as a
    *   consequence of an upstream break, never as a benign skip.
    * - `unsupported`: the signature could not be computed at all, either
@@ -170,7 +170,7 @@ export interface VerifyChainOptions {
 /**
  * Verify a single hash chain. `entries` are all the entries for one scope; they
  * are sorted by chainPosition internally (so a reordered export array still
- * validates the true chain — tampering surfaces through the hash links).
+ * validates the true chain; tampering surfaces through the hash links).
  */
 export function verifyChain(
   entries: readonly NormalizedEntry[],
@@ -345,7 +345,7 @@ function verifyEntry(
     );
   }
 
-  // Input-gated: binding-integrity. Runs whenever the row payload is present —
+  // Input-gated: binding-integrity. Runs whenever the row payload is present:
   // the dump always carries it, and the export now carries it too (engine ≥ v0.26.x).
   if (entry.binding) {
     optionalChecks.payload_binding = 'applied';
@@ -381,7 +381,7 @@ function verifyEntry(
   if (entry.signingKeyId === null) {
     // Fail closed under a key policy: a high-assurance run that requires a
     // specific key (or out-of-band keys) must NOT accept an unsigned/null-key
-    // entry as valid — otherwise an attacker forges an entry, nulls its
+    // entry as valid; otherwise an attacker forges an entry, nulls its
     // signingKeyId, and slips past the policy the auditor explicitly set.
     if (options.requireKeyId || options.requireOutOfBandKeys) {
       return fail(
