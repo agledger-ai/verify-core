@@ -442,7 +442,7 @@ function verifyEntry(
     }
   }
 
-  // Signed-kid binding (engine mirror: signing_key_drift, #893). The row's
+  // Signed-kid binding (engine mirror: signing_key_drift). The row's
   // signingKeyId column selected the key above, but the column is a
   // denormalized convenience; the kid at protected-header label 4 is
   // signature-covered. A divergence means the column was rewritten after
@@ -564,8 +564,7 @@ function checkOidcActor(
  * `CHAIN_KEY_EXPIRED`, so a consumer branching on the code saw "expired" for a
  * key that had not started yet and would reason about rotation or retention
  * when the real condition is clock skew or backdating. Those are different
- * investigations, and the activation side is the security-relevant one
- * (agents#112).
+ * investigations, and the activation side is the security-relevant one.
  */
 function temporalKeyFailure(
   createdAt: string,

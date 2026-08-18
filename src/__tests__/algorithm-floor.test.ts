@@ -26,7 +26,7 @@ import type { NormalizedEntry, VerificationKey } from '../chain.js';
  *   - the all-zero unsigned sentinel is evaluated at the key's expected
  *     signature length, after algorithm resolution;
  *   - the signature-covered kid (label 4) is cross-checked against the row's
- *     signingKeyId column (engine mirror: signing_key_drift, #893);
+ *     signingKeyId column (engine mirror: signing_key_drift);
  *   - untagged COSE_Sign1 is rejected, matching the engine's decoder.
  */
 
@@ -133,7 +133,7 @@ describe('resolveKeyAlgorithm', () => {
   });
 });
 
-describe('verifyEd25519Bytes refuses non-Ed25519 keys (api#1089 mirror)', () => {
+describe('verifyEd25519Bytes refuses non-Ed25519 keys', () => {
   it('returns false for a P-256 key even when the ECDSA fallback would verify', () => {
     const input = new Uint8Array([1, 2, 3]);
     // DER ECDSA signature, exactly what Node's verify(null, ...) fallback accepts.

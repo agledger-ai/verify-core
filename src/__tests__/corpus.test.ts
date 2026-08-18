@@ -17,7 +17,7 @@ import type { FailureCode } from '../failures.js';
  * loudly. The fixtures are REAL `/audit-export` output produced and owned by
  * agledger-api; regenerate (on a wire-format change) via agledger-api's
  * `pnpm generate:corpus`. They must mirror real output exactly, never a
- * bilingual superset (F-682).
+ * bilingual superset.
  */
 
 const HERE = dirname(fileURLToPath(import.meta.url));

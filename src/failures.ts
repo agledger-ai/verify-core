@@ -34,7 +34,7 @@
  *   - CHAIN_KEY_NOT_YET_ACTIVE  entry written before the key's activated_at.
  *                                Split from CHAIN_KEY_EXPIRED so a consumer is
  *                                not told "expired" about a key that had not
- *                                started yet (agents#112).
+ *                                started yet.
  *   - CHAIN_EMPTY (new)        a chain/vault with nothing to verify is a non-clean
  *                                verdict, never a silent pass.
  */

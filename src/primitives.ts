@@ -187,8 +187,8 @@ export function resolveKeyAlgorithm(
  *
  * Refuses non-Ed25519 keys. Node's `verify(null, ...)` silently falls back to
  * ECDSA/SHA-256 for EC keys, which would accept a signature no conformant
- * EdDSA verifier accepts (the engine guards the signing side the same way,
- * api#1089), so the key type is asserted before any crypto runs.
+ * EdDSA verifier accepts (the engine guards the signing side the same way),
+ * so the key type is asserted before any crypto runs.
  *
  * CAUTION for direct callers: as with `verifySignatureBytes`, `false` conflates
  * "did not verify" with "this host cannot compute EdDSA". Check
@@ -221,7 +221,7 @@ export function verifyEd25519Bytes(
  * distinguishable: a `false` return means the signature did not verify, while
  * a throw means the host runtime could not perform the operation at all (see
  * `runtimeCanCompute`). Collapsing those two into one boolean is what made a
- * FIPS-locked host report an intact Ed25519 chain as forged (agents#113).
+ * FIPS-locked host report an intact Ed25519 chain as forged.
  *
  * ES256 mirrors the engine's `verifyWithAlgorithm`: SHA-256 digest passed
  * positionally, `dsaEncoding: 'ieee-p1363'` (COSE raw r||s, 64 bytes). The
@@ -242,7 +242,7 @@ function dispatchVerify(
   });
   // Redundant with resolution from the same bytes, kept so a refactor that
   // ever passes the algorithm in from elsewhere cannot reach Node's silent
-  // key-type-dispatched fallback (the api#1089 trap).
+  // key-type-dispatched fallback.
   if (keyObj.asymmetricKeyType !== keyAlg.nodeKeyType) return false;
   if (keyAlg.nodeKeyType === 'ec') {
     if (keyObj.asymmetricKeyDetails?.namedCurve !== keyAlg.namedCurve) return false;
@@ -546,7 +546,7 @@ export function verifyCoseSign1(
   // an Ed25519 key (by OID) on a host that cannot compute EdDSA. A FIPS-locked
   // runtime refuses such a key at LOAD, so "did not parse" there means "this
   // host will not touch it", not "someone forged it". Without this, the whole
-  // agents#113 capability gate below is unreachable on the one path it was
+  // runtime-capability gate below is unreachable on the one path it was
   // written for, and an intact chain still reads as tamper.
   if (keyAlg === 'unparseable') {
     return isRuntimeRefusedEd25519Key(publicKeyBase64) ? 'unsupported-key-algorithm' : 'invalid';
@@ -556,8 +556,8 @@ export function verifyCoseSign1(
   const headerAlg = extractHeaderAlg(parts.protectedBstr);
   if (headerAlg === null || !keyAlg.coseAlgs.includes(headerAlg)) return 'alg-mismatch';
   // Two independent reasons the signature cannot be checked: this build does
-  // not implement the algorithm, or the host runtime refuses to compute it
-  // (agents#113). Both must read as "not verified", never as "did not verify".
+  // not implement the algorithm, or the host runtime refuses to compute it.
+  // Both must read as "not verified", never as "did not verify".
   if (!keyAlg.verifiable || !runtimeCanCompute(keyAlg)) return 'unsupported-key-algorithm';
 
   if (
@@ -595,7 +595,7 @@ function extractHeaderAlg(protectedBstr: Uint8Array): number | null {
  * hex, matching the engine's `vault_signing_keys.key_id` shape. Returns null
  * when absent or malformed. The caller cross-checks it against the row's
  * `signingKeyId` column: the column is a denormalized convenience, the kid is
- * signed, so a rewritten column surfaces as drift (engine mirror: #893).
+ * signed, so a rewritten column surfaces as drift (engine mirror: signing_key_drift).
  */
 export function extractKid(protectedBstr: Uint8Array): string | null {
   try {

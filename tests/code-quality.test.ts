@@ -68,6 +68,30 @@ function collectMarkdown(dir: string): string[] {
   return results;
 }
 
+// `dist`/`build`/`coverage` are output and `CHANGELOG.md` is history.
+// `testdata` is generated upstream and digest-pinned by CORPUS-LOCK.json,
+// so changes there have to be made at the generator.
+const SKIP = new Set([
+  'node_modules',
+  'dist',
+  'build',
+  'coverage',
+  '.git',
+  '.claude',
+  'testdata',
+]);
+
+function walk(dir: string, keep: (entry: string) => boolean): string[] {
+  const results: string[] = [];
+  for (const entry of readdirSync(dir)) {
+    if (SKIP.has(entry)) continue;
+    const full = join(dir, entry);
+    if (statSync(full).isDirectory()) results.push(...walk(full, keep));
+    else if (keep(entry)) results.push(full);
+  }
+  return results;
+}
+
 function relPath(file: string): string {
   return relative(ROOT, file);
 }
@@ -174,29 +198,7 @@ describe('no em dashes', () => {
   // escape so the pattern does not match its own source.
   const EM_DASH = /\u2014/;
 
-  // `dist`/`build`/`coverage` are output and `CHANGELOG.md` is history.
-  // `testdata` is generated upstream and digest-pinned by CORPUS-LOCK.json,
-  // so changes there have to be made at the generator.
-  const SKIP = new Set([
-    'node_modules',
-    'dist',
-    'build',
-    'coverage',
-    '.git',
-    '.claude',
-    'testdata',
-  ]);
 
-  function walk(dir: string, keep: (entry: string) => boolean): string[] {
-    const results: string[] = [];
-    for (const entry of readdirSync(dir)) {
-      if (SKIP.has(entry)) continue;
-      const full = join(dir, entry);
-      if (statSync(full).isDirectory()) results.push(...walk(full, keep));
-      else if (keep(entry)) results.push(full);
-    }
-    return results;
-  }
 
   function offenders(files: string[]): string[] {
     const found: string[] = [];
@@ -262,7 +264,7 @@ describe('published tarball carries no dangling source-map references', () => {
   // sourcesContent and src/ is not in the tarball, so they resolve to nothing.
   // Excluding the file is only half the change: tsc still appends a
   // `//# sourceMappingURL=` comment to every .js and .d.ts, which then points at
-  // a map the tarball does not contain (agents#114). Turn the emit off instead.
+  // a map the tarball does not contain. Turn the emit off instead.
   it('does not emit maps that "files" excludes', () => {
     const pkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')) as {
       files?: string[];
@@ -281,5 +283,31 @@ describe('published tarball carries no dangling source-map references', () => {
         'so every emitted file would reference a map that never ships. ' +
         'Either drop the "files" exclusion or turn the emit off.',
     ).toHaveLength(0);
+  });
+});
+
+describe('no tracker references', () => {
+  // These packages are public; the trackers they used to cite are not. A
+  // private issue number in a shipped docstring is a dead link for every
+  // consumer who reads it, and `dist/*.d.ts` puts it in their editor. Say
+  // what the behaviour is rather than where it was decided.
+  const TRACKER_REF =
+    /(?:agledger-)?(?:agents|api|testbed|web)#\d+|(?<![\w/])#\d{2,4}\b|\bF-\d{3}\b|\bCR-\d+\b/;
+
+  it('source, tests and docs cite no issue numbers', () => {
+    const dirs = readdirSync(ROOT).filter(e => e === 'src' || e === 'test' || e === 'tests');
+    const files = [
+      ...dirs.flatMap(d => walk(join(ROOT, d), e => extname(e) === '.ts')),
+      ...walk(ROOT, e => extname(e) === '.md' && e !== 'CHANGELOG.md'),
+    ];
+    const found: string[] = [];
+    for (const file of files) {
+      readFileSync(file, 'utf8')
+        .split('\n')
+        .forEach((line, i) => {
+          if (TRACKER_REF.test(line)) found.push(`${relPath(file)}:${i + 1}  ${line.trim()}`);
+        });
+    }
+    expect(found, `Tracker references:\n${found.join('\n')}`).toHaveLength(0);
   });
 });
