@@ -8,7 +8,7 @@ import {
 } from '../primitives.js';
 
 /**
- * The runtime half of algorithm capability (agents#113).
+ * The runtime half of algorithm capability.
  *
  * `verifiable` in the algorithm table says what this BUILD implements. Whether
  * a signature can actually be checked also depends on the HOST RUNTIME, which

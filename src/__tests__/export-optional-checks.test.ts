@@ -6,12 +6,12 @@ import { verifyAuditExport } from '../audit-export.js';
 import type { RecordAuditExportInput } from '../audit-export.js';
 
 /**
- * Pass-2 wire parity (agledger-agents#76, agledger-api a7eec8e4).
+ * Pass-2 wire parity.
  *
  * The export wire now carries `actorOidcSynthesized` per entry,
  * `signingKeyWindows` in exportMetadata, and the denormalized row `payload`.
  * verify-core flips all three formerly dump-only checks (`oidc_actor`,
- * `key_temporal`, and `payload_binding` since F-731) to `applied` on the export
+ * `key_temporal`, and `payload_binding`) to `applied` on the export
  * path when those inputs are present.
  *
  * The corpus is real agledger-api output (`testdata/conformance/export/valid.json`);
@@ -39,7 +39,7 @@ describe('export-path optional checks (Pass-2 wire parity)', () => {
     expect(result.optionalChecks.payload_binding).toBe('applied');
   });
 
-  it('surfaces verificationGuide.unsignedFields as unsignedProjectionFields (api#769)', () => {
+  it('surfaces verificationGuide.unsignedFields as unsignedProjectionFields', () => {
     const base = loadValid();
 
     // The real engine ships the guidance on every export; the verifier echoes
@@ -50,7 +50,7 @@ describe('export-path optional checks (Pass-2 wire parity)', () => {
     expect(real.unsignedProjectionFields).toEqual(base.verificationGuide?.unsignedFields ?? []);
     expect(real.unsignedProjectionFields.length).toBeGreaterThan(0);
 
-    // An export without the guidance (pre-#769 engines) reports an empty list.
+    // An export without the guidance (older engines) reports an empty list.
     const withoutGuide: RecordAuditExportInput = { ...base };
     delete withoutGuide.verificationGuide;
     expect(verifyAuditExport(withoutGuide).unsignedProjectionFields).toEqual([]);
@@ -82,7 +82,7 @@ describe('export-path optional checks (Pass-2 wire parity)', () => {
       delete e.actorOidcSynthesized;
       // A pre-binding export carries no row payload/entryType for the verifier
       // to cross-check, so payload_binding must stay skipped (never applied to
-      // an export that predates the F-731 wire fields).
+      // an export that predates those wire fields).
       delete e.payload;
       delete e.entryType;
       delete e.recordId;
@@ -97,7 +97,7 @@ describe('export-path optional checks (Pass-2 wire parity)', () => {
   it('catches the dump-only OIDC mismatch on the export path when the wire carries it', () => {
     // synthesized=true with iss/sub that DON'T match the signed predicate's
     // on_behalf_of.oidc → CHAIN_OIDC_ACTOR_MISMATCH. Hand-tampered (the API
-    // corpus generator doesn't ship this vector yet; #595 follow-up).
+    // corpus generator doesn't ship this vector yet).
     const exp = loadValid();
     const target = exp.entries[0] as Record<string, unknown>;
     target.actorOidcSynthesized = true;
@@ -109,7 +109,7 @@ describe('export-path optional checks (Pass-2 wire parity)', () => {
     expect(result.optionalChecks.oidc_actor).toBe('applied');
   });
 
-  // agents#112: the two directions carry different codes. Both used to report
+  // the two directions carry different codes. Both used to report
   // CHAIN_KEY_EXPIRED, which sent a consumer investigating rotation when the
   // real condition was a backdated entry or clock skew.
   it('reports CHAIN_KEY_NOT_YET_ACTIVE when entries predate key activation', () => {

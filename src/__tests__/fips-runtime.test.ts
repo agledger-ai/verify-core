@@ -3,8 +3,7 @@ import { generateKeyPairSync, sign as cryptoSign, type KeyObject } from 'node:cr
 import { encode as cborEncode, rfc8949EncodeOptions } from 'cborg';
 
 /**
- * A FIPS-locked host must not report an intact Ed25519 chain as forged
- * (agents#113).
+ * A FIPS-locked host must not report an intact Ed25519 chain as forged.
  *
  * The measured behaviour: with the OpenSSL FIPS provider active, node's
  * verify() throws ERR_OSSL_EVP_OPERATION_NOT_SUPPORTED_FOR_THIS_KEYTYPE for a

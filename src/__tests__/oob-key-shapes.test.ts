@@ -6,7 +6,7 @@ import { verifyAuditExport } from '../audit-export.js';
 import type { RecordAuditExportInput } from '../audit-export.js';
 
 /**
- * F-698 regression: `options.publicKeys` accepts BOTH the compact
+ * Regression: `options.publicKeys` accepts BOTH the compact
  * `Record<keyId, b64SPKI>` shape AND the SDK-natural `VerificationKey[]`
  * shape (the .data list from `client.verificationKeys.list()`). A wrong
  * shape must throw `TypeError` at the boundary, never silently fall
@@ -31,7 +31,7 @@ function oobAsSdkArray(): Array<{ keyId: string; publicKey: string; activatedAt?
   return Object.entries(map).map(([keyId, publicKey]) => ({ keyId, publicKey }));
 }
 
-describe('F-698: verifyAuditExport publicKeys polymorphism', () => {
+describe('verifyAuditExport publicKeys polymorphism', () => {
   it('accepts Record<keyId, b64SPKI> form and routes signatures to OOB keys', () => {
     const result = verifyAuditExport(loadValid(), { publicKeys: loadOobKeys() });
     expect(result.valid).toBe(true);
@@ -78,13 +78,13 @@ describe('F-698: verifyAuditExport publicKeys polymorphism', () => {
 });
 
 /**
- * F-698 temporal-axis regression: when the caller supplies a key out of band,
+ * Temporal-axis regression: when the caller supplies a key out of band,
  * the export's own (untrusted) `signingKeyWindows` MUST NOT overwrite that
  * key's activation/retirement window. A compromised export could otherwise
  * hide a retirement by setting `retiredAt: null` and silently pass entries
  * signed by a key the auditor knows to be retired.
  */
-describe('F-698 temporal axis: signingKeyWindows must not clobber OOB keys', () => {
+describe('Temporal axis: signingKeyWindows must not clobber OOB keys', () => {
   it('OOB retiredAt survives export signingKeyWindows and fires CHAIN_KEY_EXPIRED', () => {
     const exp = loadValid();
     const map = loadOobKeys();

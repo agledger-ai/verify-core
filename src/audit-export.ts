@@ -77,7 +77,7 @@ export interface RecordAuditExportInput {
   };
   entries: AuditExportEntryInput[];
   /**
-   * Self-describing verification guidance the engine ships in the export (api#769).
+   * Self-describing verification guidance the engine ships in the export.
    * `unsignedFields` lists per-entry fields that are UNSIGNED display projections
    * (e.g. `actorDisplayName`) resolved at export time, not covered by the COSE_Sign1
    * signature. A PASS does NOT vouch for these labels; signed attribution is the
@@ -117,7 +117,7 @@ export interface VerifyExportOptions {
    *
    * Anything else throws `TypeError` at the boundary. Fail-closed: the verifier
    * never silently falls back to embedded keys when the caller meant to defeat
-   * trust in them. See agledger-agents#77 (F-698).
+   * trust in them.
    */
   publicKeys?: Record<string, string> | ReadonlyArray<OutOfBandKeyEntry>;
   /** Require every entry to reference this keyId (else CHAIN_KEY_POLICY_VIOLATION). */
@@ -169,7 +169,7 @@ export interface VerifyExportResult {
   keyProvenance: { outOfBand: number; embedded: number };
   /**
    * Per-entry fields the export self-describes as UNSIGNED display projections
-   * (from `verificationGuide.unsignedFields`, api#769), e.g. `actorDisplayName`.
+   * (from `verificationGuide.unsignedFields`), e.g. `actorDisplayName`.
    * A valid signature does NOT cover these; signed attribution is the
    * `actorOwnerId`/`actorId` UUID. Empty when the export carries no such guidance.
    * A caller surfacing a PASS should warn that these labels are not vouched for.
@@ -329,7 +329,7 @@ function resolveKeys(
       // key out-of-band AND brought their own activation/retirement window,
       // the export's (untrusted) signingKeyWindows MUST NOT overwrite it.
       // A compromised export could otherwise hide a retirement by setting
-      // retiredAt:null, reopening F-698 on the temporal axis. When the OOB
+      // retiredAt:null, reopening the fallback on the temporal axis. When the OOB
       // caller did not carry a window, we still fall through to the export's
       // window, since most auditors trust the engine's published key-rotation log
       // even when they bring their own key catalogue.
@@ -358,7 +358,7 @@ interface NormalizedOobEntry {
  * Normalize `options.publicKeys` into a uniform array of entries, or throw
  * `TypeError` at the boundary if the shape is wrong. Fail-closed by design:
  * an OOB-key argument that silently falls back to embedded keys would lie
- * about the audit-independence claim (see agledger-agents#77 / F-698).
+ * about the audit-independence claim.
  *
  * Accepts:
  *   - `Record<keyId, base64SpkiDer>`: compact map (string-keyed object whose

@@ -4,8 +4,7 @@ import { encode as cborEncode, rfc8949EncodeOptions } from 'cborg';
 
 /**
  * The FIPS refusal measured on a real host happens at KEY LOAD, one step before
- * the verify() call `fips-runtime.test.ts` simulates (agents#113, second
- * report). `createPublicKey` throws "Failed to read asymmetric key" for a
+ * the verify() call `fips-runtime.test.ts` simulates. `createPublicKey` throws "Failed to read asymmetric key" for a
  * perfectly good Ed25519 SPKI, so `resolveKeyAlgorithm` returns 'unparseable'
  * and `verifyCoseSign1` short-circuited to 'invalid' BEFORE reaching the
  * runtime-capability gate. The entire capability mechanism was unreachable on
