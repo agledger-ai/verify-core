@@ -10,7 +10,7 @@ import type { FailureCode } from '../failures.js';
  * EXPORT-kind conformance corpus runner.
  *
  * Reads testdata/conformance/manifest-export.json and replays every vector
- * through verifyAuditExport — the same entrypoint the SDK /verify subpath, the
+ * through verifyAuditExport, the same entrypoint the SDK /verify subpath, the
  * CLI, and the MCP server call. This is the anti-drift seam: a pass vector that
  * fails (or a fail vector that passes / returns the wrong canonical code) means
  * the engine wire format and the verifier have diverged, and the test fails

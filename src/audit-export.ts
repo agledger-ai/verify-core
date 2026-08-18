@@ -1,7 +1,7 @@
 /**
  * Adapter: verify a live `/audit-export` JSON document (one record's chain).
  *
- * This is the customer/developer path — `client.records.getAuditExport(id)`
+ * This is the customer/developer path: `client.records.getAuditExport(id)`
  * then `verifyAuditExport(...)`. It maps the export wire shape onto the shared
  * normalized entry and runs `verifyChain`.
  *
@@ -9,13 +9,13 @@
  * their inputs (engine ≥ v0.26.x): the `actorOidcSynthesized` flag +
  * `actorOidcIss/Sub` enable the OIDC-actor cross-check; `signingKeyWindows` +
  * per-entry `createdAt` enable temporal key-validity; and the per-entry
- * denormalized `payload` + `entryType` enable binding-integrity — the export's
+ * denormalized `payload` + `entryType` enable binding-integrity, the export's
  * own verificationGuide step 4. The binding check defends against post-export
  * tampering of the human-readable `payload`/`criteria` view: the verifier
  * re-decodes the signed predicate from `coseSign1` and deep-equals it against
  * the row `payload`, so a rewritten `payload` with an intact envelope fails
  * CHAIN_PAYLOAD_BINDING_MISMATCH (validated against a real engine v0.26.4
- * export — `buildPredicateForRow` reconstructs the signed predicate exactly).
+ * export; `buildPredicateForRow` reconstructs the signed predicate exactly).
  * Older exports without these fields stay `skipped_no_input`, surfaced in the
  * result so a caller never mistakes "not checked here" for "checked and passed".
  */
@@ -36,7 +36,7 @@ export interface AuditExportEntryInput {
   chainPosition?: number;
   /** Legacy alias for `chainPosition`. */
   position?: number;
-  /** ISO-8601 write time. Engine ≥ v0.26.x — gates the temporal key-validity check. */
+  /** ISO-8601 write time. Engine ≥ v0.26.x; gates the temporal key-validity check. */
   createdAt?: string;
   /** OIDC issuer the actor was synthesized from (engine ≥ v0.26.x). */
   actorOidcIss?: string | null;
@@ -44,9 +44,9 @@ export interface AuditExportEntryInput {
   actorOidcSub?: string | null;
   /** Tri-state from `audit_vault.actor_oidc_synthesized` (engine ≥ v0.26.x). Marker for the OIDC-actor check. */
   actorOidcSynthesized?: boolean | null;
-  /** The record this entry belongs to — pairs with `payload`/`entryType` to drive the binding check. */
+  /** The record this entry belongs to; pairs with `payload`/`entryType` to drive the binding check. */
   recordId?: string | null;
-  /** The audit-vault entry type (e.g. `RECORD_CREATED`) — drives the binding check's predicate reconstruction. */
+  /** The audit-vault entry type (e.g. `RECORD_CREATED`); drives the binding check's predicate reconstruction. */
   entryType?: string;
   /** Denormalized row `payload` jsonb. Present → the binding-integrity check runs (verificationGuide step 4). */
   payload?: Record<string, unknown>;
@@ -59,7 +59,7 @@ export interface AuditExportEntryInput {
   };
 }
 
-/** Per-key activation/retirement window — drives temporal key-validity (engine ≥ v0.26.x). */
+/** Per-key activation/retirement window; drives temporal key-validity (engine ≥ v0.26.x). */
 export interface SigningKeyWindow {
   activatedAt: string;
   retiredAt: string | null;
@@ -80,7 +80,7 @@ export interface RecordAuditExportInput {
    * Self-describing verification guidance the engine ships in the export (api#769).
    * `unsignedFields` lists per-entry fields that are UNSIGNED display projections
    * (e.g. `actorDisplayName`) resolved at export time, not covered by the COSE_Sign1
-   * signature. A PASS does NOT vouch for these labels — signed attribution is the
+   * signature. A PASS does NOT vouch for these labels; signed attribution is the
    * `actorOwnerId`/`actorId` UUID. Surfaced on the result so a verdict can say so.
    */
   verificationGuide?: {
@@ -91,13 +91,13 @@ export interface RecordAuditExportInput {
 /**
  * Structural shape for a single out-of-band key in array form. Matches the SDK's
  * `VerificationKey` (the `.data[]` from `client.verificationKeys.list()`) plus
- * the SCITT COSE_KeySet (`/.well-known/scitt-keys`) entry shape — extra fields
+ * the SCITT COSE_KeySet (`/.well-known/scitt-keys`) entry shape; extra fields
  * are ignored. `publicKey` must be SPKI DER base64.
  */
 export interface OutOfBandKeyEntry {
   keyId: string;
   publicKey: string;
-  /** Optional activation timestamp — feeds temporal key-validity when present. */
+  /** Optional activation timestamp; feeds temporal key-validity when present. */
   activatedAt?: string;
   /** Optional retirement timestamp; `null` means "active, no scheduled retirement". */
   retiredAt?: string | null;
@@ -111,8 +111,8 @@ export interface VerifyExportOptions {
    * rather than trusting the export's own `signingPublicKeys`.
    *
    * Accepts either form:
-   *   - `Record<keyId, base64SpkiDer>` — the compact map shape
-   *   - `OutOfBandKeyEntry[]` — the natural shape returned by
+   *   - `Record<keyId, base64SpkiDer>`: the compact map shape
+   *   - `OutOfBandKeyEntry[]`: the natural shape returned by
    *     `client.verificationKeys.list().data` and SCITT COSE_KeySet listings
    *
    * Anything else throws `TypeError` at the boundary. Fail-closed: the verifier
@@ -124,7 +124,7 @@ export interface VerifyExportOptions {
   requireKeyId?: string;
   /**
    * High-assurance: refuse keys embedded in the export. An entry whose only key
-   * is export-embedded fails CHAIN_KEY_POLICY_VIOLATION — verifying the engine
+   * is export-embedded fails CHAIN_KEY_POLICY_VIOLATION; verifying the engine
    * against its own embedded key is not an independent audit.
    */
   requireOutOfBandKeys?: boolean;
@@ -152,7 +152,7 @@ export interface VerifyExportResult {
    * - `oidc_actor` and `key_temporal` flip to `applied` when the export wire
    *   carries their inputs (engine ≥ v0.26.x: `actorOidcSynthesized` per
    *   entry, `signingKeyWindows` in exportMetadata, `createdAt` per entry).
-   * - `payload_binding` stays `skipped_no_input` here by design — the export
+   * - `payload_binding` stays `skipped_no_input` here by design: the export
    *   re-projects payload from the signed bytes, so this check is dump-only
    *   (run `@agledger/verify` over a full vault dump to exercise it).
    *
@@ -164,12 +164,12 @@ export interface VerifyExportResult {
   /**
    * How many signature checks resolved against out-of-band vs export-embedded
    * keys. `embedded > 0` means the verdict trusts keys shipped by the engine
-   * that produced the export — supply out-of-band keys for an independent audit.
+   * that produced the export. Supply out-of-band keys for an independent audit.
    */
   keyProvenance: { outOfBand: number; embedded: number };
   /**
    * Per-entry fields the export self-describes as UNSIGNED display projections
-   * (from `verificationGuide.unsignedFields`, api#769) — e.g. `actorDisplayName`.
+   * (from `verificationGuide.unsignedFields`, api#769), e.g. `actorDisplayName`.
    * A valid signature does NOT cover these; signed attribution is the
    * `actorOwnerId`/`actorId` UUID. Empty when the export carries no such guidance.
    * A caller surfacing a PASS should warn that these labels are not vouched for.
@@ -214,7 +214,7 @@ export function verifyAuditExport(
     };
     // Binding-integrity: when the export carries the denormalized row `payload`
     // (engine ≥ v0.26.x), cross-check it against the predicate decoded from the
-    // signed bytes — the export's own verificationGuide step 4. The threat is
+    // signed bytes, the export's own verificationGuide step 4. The threat is
     // post-export tampering of the human-readable `payload`/`criteria` view: an
     // attacker rewrites `payload` and leaves `coseSign1` intact. The verifier
     // re-decodes the signed predicate and compares, catching the divergence
@@ -231,7 +231,7 @@ export function verifyAuditExport(
     // The synthesized flag is the marker that the export carries the OIDC
     // wire shape at all. Older exports omit it entirely; new exports always
     // include it (false/null/true). Setting `oidcActor` flips `oidc_actor`
-    // to `applied` in the chain result — never `applied` for old exports.
+    // to `applied` in the chain result; never `applied` for old exports.
     if (e.actorOidcSynthesized !== undefined) {
       base.oidcActor = {
         iss: e.actorOidcIss ?? null,
@@ -331,7 +331,7 @@ function resolveKeys(
       // A compromised export could otherwise hide a retirement by setting
       // retiredAt:null, reopening F-698 on the temporal axis. When the OOB
       // caller did not carry a window, we still fall through to the export's
-      // window — most auditors trust the engine's published key-rotation log
+      // window, since most auditors trust the engine's published key-rotation log
       // even when they bring their own key catalogue.
       const oobCarriesWindow =
         existing.source === 'out-of-band' &&
@@ -361,9 +361,9 @@ interface NormalizedOobEntry {
  * about the audit-independence claim (see agledger-agents#77 / F-698).
  *
  * Accepts:
- *   - `Record<keyId, base64SpkiDer>` — compact map (string-keyed object whose
+ *   - `Record<keyId, base64SpkiDer>`: compact map (string-keyed object whose
  *     values are all strings)
- *   - `OutOfBandKeyEntry[]` — natural SDK shape from `verificationKeys.list()`,
+ *   - `OutOfBandKeyEntry[]`: natural SDK shape from `verificationKeys.list()`,
  *     or COSE_KeySet shape from `/.well-known/scitt-keys`
  *
  * Returns `null` when no keys were supplied; otherwise an array of normalized
@@ -379,7 +379,7 @@ function normalizeOutOfBandKeys(
       if (entry === null || typeof entry !== 'object') {
         throw new TypeError(
           `verifyAuditExport: publicKeys[${i}] is not an object (got ${typeof entry}). ` +
-            `Expected { keyId, publicKey } entries — e.g. the .data[] from client.verificationKeys.list().`,
+            `Expected { keyId, publicKey } entries, e.g. the .data[] from client.verificationKeys.list().`,
         );
       }
       const keyId = (entry as { keyId?: unknown }).keyId;
@@ -388,7 +388,7 @@ function normalizeOutOfBandKeys(
         throw new TypeError(
           `verifyAuditExport: publicKeys[${i}] is missing required string fields { keyId, publicKey } ` +
             `(got keyId=${typeof keyId}, publicKey=${typeof publicKey}). ` +
-            `Expected the SDK VerificationKey shape — publicKey must be SPKI DER base64.`,
+            `Expected the SDK VerificationKey shape: publicKey must be SPKI DER base64.`,
         );
       }
       const out: NormalizedOobEntry = { keyId, spkiBase64: publicKey };

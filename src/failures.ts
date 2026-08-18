@@ -2,7 +2,7 @@
  * Canonical failure taxonomy for AGLedger offline verification.
  *
  * One enum, shared by every surface (SDK /verify, CLI, MCP, @agledger/verify,
- * and — by mirroring these exact strings — the independent Python verifier).
+ * and, by mirroring these exact strings, the independent Python verifier).
  * SCREAMING_SNAKE to match the API's RFC 9290 problem-detail codes
  * (VALIDATION_ERROR, RATE_LIMIT_EXCEEDED, …), namespaced by sub-system:
  *
@@ -14,13 +14,13 @@
  * Every code carries an actionable next step (`suggestion`) so a result is a
  * directive, not just a verdict.
  *
- * This is the strict union of the two taxonomies it replaces — the dump
+ * This is the strict union of the two taxonomies it replaces: the dump
  * verifier's `CHAIN_*`/`CHECKPOINT_*`/`TENANT_*` codes and the export
- * verifier's lower_snake reasons — with no tamper class dropped. Two renames
+ * verifier's lower_snake reasons, with no tamper class dropped. Two renames
  * and three additions vs. the old dump set:
  *   - CHAIN_PAYLOAD_DRIFT      -> CHAIN_PAYLOAD_BINDING_MISMATCH (drift read as a
  *                                content/value judgement; this is a binding-
- *                                integrity check — the signed payload's STRUCTURE
+ *                                integrity check: the signed payload's STRUCTURE
  *                                no longer matches the canonical projection of the
  *                                row columns it is bound to. AGLedger never
  *                                inspects deliverable content.)
@@ -75,7 +75,7 @@ export type FailureCode =
   | 'TENANT_CHECKPOINT_FORK';
 
 /**
- * Actionable next step per failure code. Kept terse and operational — what the
+ * Actionable next step per failure code. Kept terse and operational: what the
  * verifier's caller (auditor, compliance team, or agent) should do next.
  */
 const SUGGESTIONS: Record<FailureCode, string> = {

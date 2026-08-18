@@ -6,7 +6,7 @@
  *   - Merkle: audit-vault/merkle.ts
  *
  * Re-implemented here (not imported from any engine/SDK code) so the verifier
- * has zero engine dependency — the load-bearing property of an offline
+ * has zero engine dependency, the load-bearing property of an offline
  * auditor: the engine could be compromised and this still verifies correctly.
  * The only runtime dependency is `cborg`, a general-purpose CBOR library (not
  * AGLedger code), and Node's built-in `crypto`. No network, no filesystem.
@@ -442,7 +442,7 @@ export function verifySignatureBytes(
 
 // --- COSE_Sign1 (RFC 9052 §4.4) verification ---
 
-/** CBOR tag 18 — tagged COSE_Sign1 envelope. */
+/** CBOR tag 18: tagged COSE_Sign1 envelope. */
 const COSE_SIGN1_TAG = 18;
 /** CBOR major type 6 (tag), value 18, short form: the required leading byte. */
 const COSE_SIGN1_TAG_PREFIX = 0xd2;
@@ -453,7 +453,7 @@ const COSE_HEADER_KID = 4;
 
 /**
  * Decode a tagged COSE_Sign1 envelope into its three load-bearing parts.
- * Returns null on any structural failure — the caller surfaces it as
+ * Returns null on any structural failure; the caller surfaces it as
  * CHAIN_COSE_DECODE_FAILED.
  */
 export interface CoseSign1Parts {
@@ -612,7 +612,7 @@ export function extractKid(protectedBstr: Uint8Array): string | null {
  * Extract the chain-mechanics private claim (`-65537`) from a COSE_Sign1
  * protected header. Returns the decoded `{ position, previous_hash }` or null
  * if the claim is missing/malformed. The caller cross-checks it against the
- * row's `chainPosition` / `previousHash` columns — a divergence means the row
+ * row's `chainPosition` / `previousHash` columns; a divergence means the row
  * was renumbered after signing.
  */
 export interface ChainClaim {
@@ -695,7 +695,7 @@ export function extractTraceparentClaim(payloadBstr: Uint8Array): string | null 
 /**
  * Decode the predicate object from a COSE_Sign1 payload bstr. The payload IS
  * the in-toto v1 Statement; the predicate body lives at `payload.predicate`.
- * Returns null on any decode failure. Used by the binding-integrity check — the
+ * Returns null on any decode failure. Used by the binding-integrity check; the
  * row's denormalised `payload` jsonb is a convenience view projected from this
  * predicate at write time; if the view was altered after signing,
  * `buildPredicateForRow(...) !== decodePredicate(...)`.
@@ -739,7 +739,7 @@ const RECORD_STATE_RESERVED_KEYS: ReadonlySet<string> = new Set([
  * build-vault-claim.ts). This is the verifier-side mirror.
  *
  * Returns null when the row's payload is structurally insufficient (e.g.
- * SCHEMA_REGISTERED missing manifestDigest) — the caller surfaces null as a
+ * SCHEMA_REGISTERED missing manifestDigest); the caller surfaces null as a
  * binding mismatch rather than throwing, so an attacker who zeros out payload
  * can't crash the verifier.
  */
@@ -834,7 +834,7 @@ function buildSchemaEventPredicateForRow(
 
 /**
  * Order-insensitive deep equality over plain JSON-shaped values. Used by the
- * binding-integrity check — the rebuilt and decoded predicates may serialize
+ * binding-integrity check: the rebuilt and decoded predicates may serialize
  * keys in different order across writer/reader paths.
  */
 export function deepEqual(a: unknown, b: unknown): boolean {
@@ -865,8 +865,8 @@ export function deepEqual(a: unknown, b: unknown): boolean {
 /**
  * Strip envelope-level sibling fields (`on_behalf_of`, `traceparent`) from a
  * decoded predicate. They ride alongside per-kind predicate fields on the wire
- * but the engine's `buildPredicateOnly` — and our `buildPredicateForRow`
- * mirror — exclude them from the rebuilt predicate. Stripping here makes the
+ * but the engine's `buildPredicateOnly` (and our `buildPredicateForRow`
+ * mirror) exclude them from the rebuilt predicate. Stripping here makes the
  * two shapes deep-equalable; envelope-level integrity is covered by the
  * signature and the OIDC-actor cross-check.
  */
@@ -1020,10 +1020,10 @@ export function extractReceiptInclusionProof(
  * `signedStatementBytes`, assert it matches the COSE payload (the signed root).
  *
  * Returns:
- *   - 'ok'                — TS sig valid AND reconstructed root matches
- *   - 'decode-fail'       — envelope or VDP malformed
- *   - 'signature-invalid' — TS signature fails (root cannot be trusted)
- *   - 'root-mismatch'     — reconstructed root != COSE payload (proof lies about
+ *   - 'ok':                TS sig valid AND reconstructed root matches
+ *   - 'decode-fail':       envelope or VDP malformed
+ *   - 'signature-invalid': TS signature fails (root cannot be trusted)
+ *   - 'root-mismatch':     reconstructed root != COSE payload (proof lies about
  *                           which tree the leaf belongs to)
  *   - 'unsupported-algorithm': the TS key commits to an algorithm this build
  *                           cannot compute. Fail closed: the Receipt may be
