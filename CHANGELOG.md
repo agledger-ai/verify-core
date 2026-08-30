@@ -4,6 +4,21 @@ All notable changes to `@agledger/verify-core` will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.4.1] - 2026-08-30
+
+Documentation and packaging only. Verification behaviour is identical to 1.4.0,
+and the two releases verify the same inputs to the same verdicts.
+
+### Added
+
+- The README documents how to install the package.
+
+### Changed
+
+- Comments and documentation no longer point at resources outside this repository.
+- Refreshed the lockfile to clear a development-only advisory in a transitive
+  dependency. Nothing in the shipped runtime changed.
+
 ## [1.4.0] - 2026-08-07
 
 ### Fixed
