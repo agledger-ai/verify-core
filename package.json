@@ -39,9 +39,9 @@
   "devDependencies": {
     "@arethetypeswrong/cli": "^0.18.3",
     "@types/node": "^24.13.3",
-    "publint": "^0.3.22",
+    "publint": "^0.3.24",
     "typescript": "^7.0.2",
-    "vitest": "^4.1.0"
+    "vitest": "^4.1.11"
   },
   "repository": {
     "type": "git",
