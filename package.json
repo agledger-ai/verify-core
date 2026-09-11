@@ -34,7 +34,7 @@
     "prepublishOnly": "npm run build && npm run lint:pkg"
   },
   "dependencies": {
-    "cborg": "6.1.1"
+    "cborg": "6.1.2"
   },
   "devDependencies": {
     "@arethetypeswrong/cli": "^0.18.3",
