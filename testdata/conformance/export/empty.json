@@ -1,5 +1,5 @@
 {
-  "recordId": "fd082ac9-87e7-4736-beae-bbeb572a0e79",
+  "recordId": "ad9a4fbd-56aa-4504-88ab-da45c07a37da",
   "chainIntegrity": true,
   "chainIntegrityReason": null,
   "chainIntegrityDetail": null,
@@ -37,11 +37,11 @@
     "offlineVerifier": "Turnkey offline verifier: `@agledger/verify` on npm (v1.0.1+). Drive `agledger-verify <dump-dir>` against a `./scripts/vault-dump.sh` output for full chain + signature + checkpoint cross-check with zero AGLedger code in the dependency tree. Pure node:crypto."
   },
   "exportMetadata": {
-    "recordId": "fd082ac9-87e7-4736-beae-bbeb572a0e79",
-    "orgId": "21d96925-a7d7-43e4-8e83-ef99bc4dfa01",
+    "recordId": "ad9a4fbd-56aa-4504-88ab-da45c07a37da",
+    "orgId": "cb1efb73-77f5-4fbd-aa6d-9541c81ed76d",
     "type": "test-generic-v1",
     "operatingMode": "cleartext",
-    "exportDate": "2026-08-29T21:32:41.470Z",
+    "exportDate": "2026-09-11T01:09:15.295Z",
     "totalEntries": 0,
     "expectedEntries": null,
     "chainIntegrity": true,
@@ -61,7 +61,7 @@
     },
     "signingKeyWindows": {
       "15d63684b387235c": {
-        "activatedAt": "2026-08-29T21:32:41.041Z",
+        "activatedAt": "2026-09-11T01:09:15.211Z",
         "retiredAt": null
       }
     }
