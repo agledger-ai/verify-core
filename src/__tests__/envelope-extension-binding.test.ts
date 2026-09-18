@@ -6,9 +6,9 @@ import { verifyAuditExport } from '../audit-export.js';
 import type { RecordAuditExportInput } from '../audit-export.js';
 
 /**
- * The row copy of `on_behalf_of` / `traceparent` in an export entry's
- * `payload` is what a reader sees, and the predicate comparison strips both
- * sides of it, so it is bound to the signed predicate separately. Fixtures are
+ * A row copy of `on_behalf_of` / `traceparent` in an export entry's `payload`
+ * is what a reader sees, and the predicate comparison strips both sides of it,
+ * so a copy that is present is bound to the signed predicate separately. Fixtures are
  * unmodified live 1.8.0 exports (see agent-signature.test.ts).
  */
 
@@ -42,12 +42,27 @@ describe('envelope extensions in the row payload are bound to the signed predica
     expect(result.brokenAt?.code).toBe('CHAIN_PAYLOAD_BINDING_MISMATCH');
   });
 
-  it('a deleted on_behalf_of block fails the binding', () => {
+  it('a rewritten sealed cert thumbprint fails the binding', () => {
     const doc = load('export-delegated-bound.json');
-    delete firstWithObo(doc).payload['on_behalf_of'];
+    const obo = firstWithObo(doc).payload['on_behalf_of'] as Record<string, unknown>;
+    obo['validated'] = !obo['validated'];
     const result = verifyAuditExport(doc);
     expect(result.valid).toBe(false);
     expect(result.brokenAt?.code).toBe('CHAIN_PAYLOAD_BINDING_MISMATCH');
+  });
+
+  it('a row copy that is not an object fails the binding', () => {
+    const doc = load('export-cert-lifecycle.json');
+    firstWithObo(doc).payload['on_behalf_of'] = 'forged';
+    const result = verifyAuditExport(doc);
+    expect(result.valid).toBe(false);
+    expect(result.brokenAt?.code).toBe('CHAIN_PAYLOAD_BINDING_MISMATCH');
+  });
+
+  it('a row without the block still verifies: the engine signs an on_behalf_of from authentication that never reaches the row', () => {
+    const doc = load('export-cert-lifecycle.json');
+    delete firstWithObo(doc).payload['on_behalf_of'];
+    expect(verifyAuditExport(doc).valid).toBe(true);
   });
 
   it('an on_behalf_of block added to an entry that signed none fails the binding', () => {

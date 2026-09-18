@@ -233,10 +233,18 @@ describe('agent signature re-check on synthetic entries', () => {
 
   it('fails shapes nothing can verify', () => {
     const good = agentSign(agent.privateKey, contentHex);
+    // A base64url signature is only distinguishable from unpadded standard
+    // base64 when it carries `-` or `_`, so sign content whose signature has
+    // `+` or `/`. Ed25519 is deterministic, so the search is too.
+    let urlHex = contentHex;
+    for (let i = 0; !/[+/]/.test(agentSign(agent.privateKey, urlHex)); i++) {
+      urlHex = createHash('sha256').update(`url-shape-${i}`).digest('hex');
+    }
+    const urlSig = Buffer.from(agentSign(agent.privateKey, urlHex), 'base64').toString('base64url');
     const shapes = [
       { alg: 'ES256', content_hash: `sha256:${contentHex}`, signature: good },
       { alg: 'EdDSA', content_hash: contentHex, signature: good },
-      { alg: 'EdDSA', content_hash: `sha256:${contentHex}`, signature: Buffer.from(good, 'base64').toString('base64url') },
+      { alg: 'EdDSA', content_hash: `sha256:${urlHex}`, signature: urlSig },
       { alg: 'EdDSA', content_hash: `sha256:${contentHex}`, signature: 42 },
     ];
     for (const signature of shapes) {
