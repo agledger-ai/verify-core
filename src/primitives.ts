@@ -1010,6 +1010,32 @@ export function stripEnvelopeExtensions(
   return out;
 }
 
+/**
+ * Whether the envelope extensions a row's payload carries are the ones the
+ * entry signed. The engine lifts `on_behalf_of` (an object) and `traceparent`
+ * (a W3C v00 string; any other value is dropped) off the top level of the row
+ * payload into `predicate.on_behalf_of` / `predicate.traceparent`, so the
+ * signed predicate carries exactly what this re-extraction yields. The row
+ * copy is what a reader of an export or dump sees, and
+ * {@link stripEnvelopeExtensions} takes both sides out of the predicate
+ * comparison, so without this check a rewritten or deleted row copy would
+ * still verify.
+ */
+export function envelopeExtensionsMatch(
+  rowPayload: Record<string, unknown>,
+  signedPredicate: Record<string, unknown>,
+): boolean {
+  const expected: Record<string, unknown> = {};
+  const obo = rowPayload['on_behalf_of'];
+  if (obo && typeof obo === 'object' && !Array.isArray(obo)) expected['on_behalf_of'] = obo;
+  const tp = rowPayload['traceparent'];
+  if (typeof tp === 'string' && TRACEPARENT_REGEX.test(tp)) expected['traceparent'] = tp;
+  const signed: Record<string, unknown> = {};
+  if (signedPredicate['on_behalf_of'] !== undefined) signed['on_behalf_of'] = signedPredicate['on_behalf_of'];
+  if (signedPredicate['traceparent'] !== undefined) signed['traceparent'] = signedPredicate['traceparent'];
+  return deepEqual(expected, signed);
+}
+
 // --- RFC 9162 Merkle (SCITT Receipt verifiable data structure) ---
 
 const LEAF_PREFIX = new Uint8Array([0x00]);

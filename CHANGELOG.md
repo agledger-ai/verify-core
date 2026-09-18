@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ## Unreleased
 
+### Fixed
+
+- **The row copy of `on_behalf_of` and `traceparent` is bound to the signed entry.** The payload binding check compares the signed predicate with the one rebuilt from the row payload, and both sides leave out these two envelope extensions, so a rewritten, added or deleted `on_behalf_of` block in an export entry's `payload` (the copy a reader sees: the delegating identity, the cert, the agent signature) still verified. The verifier now re-extracts them from the row payload the way the engine does when it signs (an object `on_behalf_of`; a `traceparent` only in W3C v00 shape) and requires the result to equal what the entry signed. A mismatch fails `CHAIN_PAYLOAD_BINDING_MISMATCH`. Every live and corpus export still verifies.
+
 ### Added
 
 - **Offline agent-signature check.** `verifyAuditExport` takes `agentKeys`, the Ed25519 JWKs of agent ephemeral certs (the `publicKeyJwk` sent to `POST /v1/auth/oidc/cert`, also the `cnf.jwk` claim inside the `certJws`). Where an entry's signed payload carries an engine-validated `predicate.on_behalf_of.agent_signature` and its sealed cert thumbprint matches one of those keys, the signature is re-verified over the request-body hash, so the cert holder's signature is proven without taking the Server's word for it. A signature that does not verify, or is sealed in a shape nothing can verify, fails the new `CHAIN_AGENT_SIGNATURE_INVALID`. Keys are matched only through the RFC 7638 thumbprint the entry signed, so a key for another cert is never checked against it. `verifyChain` takes the same input as an `agentKeys` registry (`buildAgentKeyRegistry`).
@@ -14,6 +18,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Changed
 
+- `LICENSE` follows SDK License Template 1.9.
 - The conformance corpus is regenerated at API 1.8.0. Same vectors and expected codes as the 1.7.0 corpus, and all pass.
 - Verified against live API 1.8.0 output: record-lifecycle entries that sign the internal state (`state`, `previousState`, `newState`) beside the display status, the `AUTH_KEY_ROTATED` platform entry, and cert-signed and delegated creates all verify, and a rewritten internal state fails the payload binding check. No verification change was needed for them.
 - The README lists every check the verifier runs, and the doc comments on `optionalChecks` no longer say the payload binding check is dump-only.

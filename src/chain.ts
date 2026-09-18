@@ -43,6 +43,7 @@ import {
   resolveKeyAlgorithm,
   sha256Hex,
   stripEnvelopeExtensions,
+  envelopeExtensionsMatch,
   verifyAgentSignature,
   verifyCoseSign1,
   type AgentPublicKeyJwk,
@@ -476,7 +477,13 @@ function verifyEntry(
       entry.binding.payload,
     );
     const decoded = decodedRaw !== null ? stripEnvelopeExtensions(decodedRaw) : null;
-    if (decoded === null || rebuilt === null || !deepEqual(rebuilt, decoded)) {
+    if (
+      decodedRaw === null ||
+      decoded === null ||
+      rebuilt === null ||
+      !deepEqual(rebuilt, decoded) ||
+      !envelopeExtensionsMatch(entry.binding.payload, decodedRaw)
+    ) {
       return fail(
         scopeId,
         expectedPosition,
