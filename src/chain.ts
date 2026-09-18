@@ -15,14 +15,14 @@
  *   - ALWAYS-RUN (every surface): position monotonicity, payloadHash =
  *     sha256(cose_sign1), previous-hash link, COSE_Sign1 decode, the signed
  *     protected-header chain-claim cross-check, and the Ed25519 signature.
- *   - INPUT-GATED (only when the normalized entry carries the inputs, i.e. the
- *     dump path): binding-integrity, OIDC-actor cross-check, temporal
- *     key-validity. The `/audit-export` wire does NOT carry the inputs these
- *     need (the API re-projects the export payload from the signed bytes and
- *     omits the synthesized flag), so running them there would either no-op
- *     silently or compare signed bytes to a derivative of themselves. They are
- *     therefore reported as `skipped_no_input` on the export path, NEVER folded
- *     into a green verdict.
+ *   - INPUT-GATED (only when the normalized entry, or the caller, supplies the
+ *     inputs): binding-integrity, OIDC-actor cross-check, temporal
+ *     key-validity, and the agent-signature re-check. The first three run on
+ *     the dump and on any export from an engine that ships the row fields
+ *     (>= v0.26.x). The agent-signature check needs the cert's public key,
+ *     which neither surface carries, so it runs only when the caller passes
+ *     `agentKeys`. A check without its input is reported `skipped_no_input`,
+ *     NEVER folded into a green verdict.
  *
  * Failure ordering is fixed so `brokenAt` is deterministic. The null-key
  * signature skip happens LAST, after the binding/OIDC checks, so a row written
@@ -34,13 +34,18 @@ import {
   decodePredicate,
   deepEqual,
   describeUnsupportedAlgorithm,
+  ed25519JwkThumbprint,
+  ed25519JwkToSpki,
+  extractAgentSignatureClaim,
   extractChainClaim,
   extractKid,
   extractOnBehalfOfClaim,
   resolveKeyAlgorithm,
   sha256Hex,
   stripEnvelopeExtensions,
+  verifyAgentSignature,
   verifyCoseSign1,
+  type AgentPublicKeyJwk,
 } from './primitives.js';
 import type { FailureCode } from './failures.js';
 
@@ -82,7 +87,39 @@ export function buildKeyRegistry(keys: readonly VerificationKey[]): KeyRegistry 
   return map;
 }
 
-/** Inputs the input-gated checks consume; present only on the dump path. */
+/**
+ * Agent cert keys for the agent-signature check, indexed by the RFC 7638
+ * thumbprint (`sha256:<hex>`) the engine seals as
+ * `predicate.on_behalf_of.cert.thumbprint`. Values are SPKI DER, base64.
+ */
+export type AgentKeyRegistry = ReadonlyMap<string, string>;
+
+/**
+ * Index caller-supplied agent cert keys by thumbprint. A key is matched to an
+ * entry only through the thumbprint that entry signed, so a key supplied for
+ * the wrong cert is never checked against it: it simply matches nothing.
+ * That is also why the source of a key needs no trust: the signed thumbprint
+ * is what binds it. Throws `TypeError` on anything that is not an Ed25519 JWK.
+ */
+export function buildAgentKeyRegistry(jwks: readonly AgentPublicKeyJwk[]): AgentKeyRegistry {
+  if (!Array.isArray(jwks)) {
+    throw new TypeError('agentKeys must be an array of Ed25519 JWKs ({ kty: "OKP", crv: "Ed25519", x }).');
+  }
+  const map = new Map<string, string>();
+  jwks.forEach((jwk, i) => {
+    const thumbprint = ed25519JwkThumbprint(jwk);
+    const spki = ed25519JwkToSpki(jwk);
+    if (thumbprint === null || spki === null) {
+      throw new TypeError(
+        `agentKeys[${i}] is not an Ed25519 public-key JWK. Expected { kty: "OKP", crv: "Ed25519", x: <base64url of 32 bytes> }, the publicKeyJwk sent at cert exchange (also the cnf.jwk claim inside the certJws).`,
+      );
+    }
+    map.set(thumbprint, spki);
+  });
+  return map;
+}
+
+/** One chain entry, plus the inputs the input-gated checks consume when the surface carries them. */
 export interface NormalizedEntry {
   /** Identity for messages: recordId (export) or chainKey (dump). */
   scopeId: string;
@@ -108,7 +145,13 @@ export interface NormalizedEntry {
   };
 }
 
-export type OptionalCheck = 'payload_binding' | 'oidc_actor' | 'key_temporal';
+/**
+ * Checks that run only when their input is present. `agent_signature` is
+ * applied when at least one entry carrying an engine-validated agent signature
+ * had its cert key supplied by the caller (`agentKeys`); neither the export
+ * nor the dump carries cert public keys.
+ */
+export type OptionalCheck = 'payload_binding' | 'oidc_actor' | 'key_temporal' | 'agent_signature';
 export type CheckApplicability = 'applied' | 'skipped_no_input';
 
 export interface SignatureOutcome {
@@ -154,6 +197,16 @@ export interface ChainResult {
   optionalChecks: Record<OptionalCheck, CheckApplicability>;
   /** How many signature checks resolved against out-of-band vs embedded keys. */
   keyProvenance: { outOfBand: number; embedded: number };
+  /**
+   * Agent signatures on this chain. `present` counts entries that passed
+   * every other check and whose signed payload carries
+   * `predicate.on_behalf_of.agent_signature`; `verified`
+   * counts those re-checked against a caller-supplied cert key and found
+   * good. `present > verified` on a valid chain means some were not checked
+   * (no key supplied, or the identity was a caller assertion), never that
+   * they failed.
+   */
+  agentSignatures: { present: number; verified: number };
 }
 
 export interface VerifyChainOptions {
@@ -165,6 +218,13 @@ export interface VerifyChainOptions {
    * CHAIN_KEY_POLICY_VIOLATION. Forces the caller to supply keys out of band.
    */
   requireOutOfBandKeys?: boolean;
+  /**
+   * Agent cert keys (see `buildAgentKeyRegistry`). When an entry's signed
+   * payload carries an engine-validated `on_behalf_of.agent_signature` and its
+   * sealed cert thumbprint matches a key here, the signature is re-verified
+   * offline; a failure is CHAIN_AGENT_SIGNATURE_INVALID.
+   */
+  agentKeys?: AgentKeyRegistry;
 }
 
 /**
@@ -186,8 +246,10 @@ export function verifyChain(
     payload_binding: 'skipped_no_input',
     oidc_actor: 'skipped_no_input',
     key_temporal: 'skipped_no_input',
+    agent_signature: 'skipped_no_input',
   };
   const keyProvenance = { outOfBand: 0, embedded: 0 };
+  const agentSignatures = { present: 0, verified: 0 };
   let verifiedEntries = 0;
   let brokenAt: ChainResult['brokenAt'];
 
@@ -202,6 +264,7 @@ export function verifyChain(
       signatureCoverage: coverage,
       optionalChecks,
       keyProvenance,
+      agentSignatures,
     };
   }
 
@@ -209,7 +272,7 @@ export function verifyChain(
   for (let i = 0; i < sorted.length; i++) {
     const entry = sorted[i]!;
     const expectedPosition = i + 1;
-    const result = verifyEntry(
+    let result = verifyEntry(
       entry,
       expectedPosition,
       previousHash,
@@ -217,6 +280,9 @@ export function verifyChain(
       options,
       optionalChecks,
     );
+    if (result.valid) {
+      result = checkAgentSignature(entry, result, options.agentKeys, optionalChecks, agentSignatures);
+    }
     entryResults.push(result);
 
     if (result.valid) verifiedEntries++;
@@ -254,7 +320,61 @@ export function verifyChain(
     signatureCoverage: coverage,
     optionalChecks,
     keyProvenance,
+    agentSignatures,
   };
+}
+
+/**
+ * Offline re-check of a sealed agent signature, on an entry that already
+ * passed every other check (so its payload is the engine's signed bytes).
+ *
+ * Runs only on an engine-validated identity (`on_behalf_of.validated: true`).
+ * On a caller-asserted one, entries written before the engine sealed these
+ * fields itself carry them as caller passthrough, and the marker telling the
+ * two apart is a column neither the export nor the dump publishes, so a
+ * failure there could not be told from a claim nobody ever checked.
+ */
+function checkAgentSignature(
+  entry: NormalizedEntry,
+  result: ChainEntryResult,
+  agentKeys: AgentKeyRegistry | undefined,
+  optionalChecks: Record<OptionalCheck, CheckApplicability>,
+  counts: { present: number; verified: number },
+): ChainEntryResult {
+  const parts = decodeCoseSign1(Buffer.from(entry.coseSign1, 'base64'));
+  if (!parts) return result;
+  const claim = extractAgentSignatureClaim(parts.payloadBstr);
+  if (claim === null) return result;
+  counts.present++;
+  if (!claim.validated || !agentKeys || claim.certThumbprint === null) return result;
+  const spki = agentKeys.get(claim.certThumbprint);
+  if (spki === undefined) return result;
+
+  optionalChecks.agent_signature = 'applied';
+  const outcome = verifyAgentSignature(spki, claim);
+  if (outcome === 'ok') {
+    counts.verified++;
+    return result;
+  }
+  const certLabel = claim.certId ?? claim.certThumbprint;
+  if (outcome === 'unsupported') {
+    return fail(
+      entry.scopeId,
+      result.position,
+      'CHAIN_UNSUPPORTED_ALGORITHM',
+      `Agent signature for cert ${certLabel} could not be checked: this host cannot compute Ed25519 (an active OpenSSL FIPS provider carries no EdDSA). Not verified, and not tamper evidence.`,
+      result.signature,
+    );
+  }
+  return fail(
+    entry.scopeId,
+    result.position,
+    'CHAIN_AGENT_SIGNATURE_INVALID',
+    outcome === 'malformed'
+      ? `Sealed agent_signature for cert ${certLabel} has a shape nothing can verify (alg must be EdDSA, content_hash sha256:<hex64>, signature 64 bytes of standard base64).`
+      : `Sealed agent_signature for cert ${certLabel} does not verify under the supplied key with thumbprint ${claim.certThumbprint}.`,
+    result.signature,
+  );
 }
 
 function fail(

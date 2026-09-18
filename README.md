@@ -57,6 +57,58 @@ if (!result.valid) {
 - **Envelope signature**: over the reconstructed `Sig_structure`, against the
   matched verification key, under the algorithm its SPKI commits to (Ed25519
   or ES256; anything else fails closed as `CHAIN_UNSUPPORTED_ALGORITHM`).
+- **Signed-kid binding**: the row's `signingKeyId` names the key the protected
+  header signed.
+- **Payload binding**: each entry's human-readable `payload` still matches the
+  predicate inside the signed bytes, so a rewritten view of the record fails
+  `CHAIN_PAYLOAD_BINDING_MISMATCH`.
+- **OIDC actor**: the row's `actorOidcIss` / `actorOidcSub` match the identity
+  signed in `predicate.on_behalf_of`.
+- **Key validity windows**: each entry was written inside its signing key's
+  activation window.
+- **Agent signatures**, when you supply the agent's cert key (below).
+
+The payload, OIDC and key-window checks run when the export carries their
+inputs, which every current Server does. The result's `optionalChecks` says
+which ran, so "not checked" never reads as "passed".
+
+## Agent signatures
+
+An agent that authenticates with an ephemeral cert can sign each request body
+it sends. The Server checks that signature, then seals it into the chain entry
+as `predicate.on_behalf_of.agent_signature`, beside the RFC 7638 thumbprint of
+the cert's public key. The envelope signature proves the Server wrote that. To
+prove the agent itself signed, without taking the Server's word for it,
+re-verify the agent signature against the cert's public key.
+
+The export does not carry cert public keys. Supply them as the Ed25519 JWK the
+agent sent to `POST /v1/auth/oidc/cert` (the same key is the `cnf.jwk` claim
+inside the `certJws` it got back):
+
+```ts
+import { verifyAuditExport } from '@agledger/verify-core';
+
+const agentKey = { kty: 'OKP', crv: 'Ed25519', x: 'BKOgK3KibE8BZH8SXTX9dmAXcwgocTMHIv-R_eRB2lo' } as const;
+const result = verifyAuditExport(exportDocument, { agentKeys: [agentKey] });
+
+console.log(result.optionalChecks.agent_signature); // 'applied'
+console.log(result.agentSignatures); // e.g. { present: 6, verified: 6 }
+```
+
+A key is matched to an entry only through the thumbprint that entry signed, so
+a key for some other cert is never checked against it and where the key came
+from needs no trust. `present` counts entries carrying an agent signature and
+`verified` those re-checked and found good; `present > verified` on a valid
+result means some were not checked, never that they failed. One that does not
+verify fails `CHAIN_AGENT_SIGNATURE_INVALID`. The check runs only where
+`on_behalf_of.validated` is `true`: on a caller-asserted identity the two fields
+may be passthrough from an older Server, and the export cannot tell which.
+
+The Server's own chain verification also compares each sealed cert against its
+live cert record (`cert_missing`, `cert_actor_drift`, `cert_window_drift`,
+`cert_expired`). That record is not exported, so those checks have no offline
+counterpart; the signed bytes already fix the cert id, thumbprint and expiry an
+entry sealed.
 
 ## Verifying on a FIPS-locked host
 

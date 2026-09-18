@@ -5,8 +5,8 @@
  * then `verifyAuditExport(...)`. It maps the export wire shape onto the shared
  * normalized entry and runs `verifyChain`.
  *
- * All three input-gated checks now run on the export path when the wire carries
- * their inputs (engine ≥ v0.26.x): the `actorOidcSynthesized` flag +
+ * The three row-level input-gated checks run on the export path when the wire
+ * carries their inputs (engine ≥ v0.26.x): the `actorOidcSynthesized` flag +
  * `actorOidcIss/Sub` enable the OIDC-actor cross-check; `signingKeyWindows` +
  * per-entry `createdAt` enable temporal key-validity; and the per-entry
  * denormalized `payload` + `entryType` enable binding-integrity, the export's
@@ -20,6 +20,7 @@
  * result so a caller never mistakes "not checked here" for "checked and passed".
  */
 import {
+  buildAgentKeyRegistry,
   buildKeyRegistry,
   verifyChain,
   type CheckApplicability,
@@ -29,6 +30,7 @@ import {
   type VerificationKey,
 } from './chain.js';
 import type { FailureCode } from './failures.js';
+import type { AgentPublicKeyJwk } from './primitives.js';
 
 /** One entry of a `/audit-export` document. */
 export interface AuditExportEntryInput {
@@ -128,6 +130,20 @@ export interface VerifyExportOptions {
    * against its own embedded key is not an independent audit.
    */
   requireOutOfBandKeys?: boolean;
+  /**
+   * Ed25519 public keys of agent ephemeral certs, as JWKs: the `publicKeyJwk`
+   * the agent sent to `POST /v1/auth/oidc/cert`, which is also the `cnf.jwk`
+   * claim inside the returned `certJws`. The export does not carry them.
+   *
+   * When an entry's signed payload carries an engine-validated
+   * `predicate.on_behalf_of.agent_signature` and its sealed cert thumbprint
+   * matches one of these keys, the signature is re-verified offline, proving
+   * the cert holder signed that request-body hash without trusting the
+   * engine's word for it. A key is matched only through the thumbprint the
+   * entry signed, so where a key came from does not need to be trusted.
+   * Anything that is not an Ed25519 JWK throws `TypeError`.
+   */
+  agentKeys?: ReadonlyArray<AgentPublicKeyJwk>;
 }
 
 export interface EntryVerificationResult {
@@ -149,14 +165,14 @@ export interface VerifyExportResult {
   /**
    * Which input-gated checks ran on this export.
    *
-   * - `oidc_actor` and `key_temporal` flip to `applied` when the export wire
-   *   carries their inputs (engine ≥ v0.26.x: `actorOidcSynthesized` per
-   *   entry, `signingKeyWindows` in exportMetadata, `createdAt` per entry).
-   * - `payload_binding` stays `skipped_no_input` here by design: the export
-   *   re-projects payload from the signed bytes, so this check is dump-only
-   *   (run `@agledger/verify` over a full vault dump to exercise it).
+   * - `payload_binding`, `oidc_actor` and `key_temporal` flip to `applied`
+   *   when the export wire carries their inputs (engine >= v0.26.x: per-entry
+   *   `payload` + `entryType`, `actorOidcSynthesized`, `createdAt`, and
+   *   `signingKeyWindows` in exportMetadata). Older exports without those
+   *   fields stay `skipped_no_input`.
+   * - `agent_signature` is `applied` only when `agentKeys` supplied the cert
+   *   key for at least one engine-validated agent signature on the chain.
    *
-   * Older exports without the new fields stay `skipped_no_input` for all three.
    * The applicability is surfaced so a caller never mistakes "not checked
    * here" for "checked and passed".
    */
@@ -175,6 +191,8 @@ export interface VerifyExportResult {
    * A caller surfacing a PASS should warn that these labels are not vouched for.
    */
   unsignedProjectionFields: string[];
+  /** Agent signatures present on the chain vs re-verified offline (see `agentKeys`). */
+  agentSignatures: { present: number; verified: number };
 }
 
 const SUPPORTED_FORMAT_VERSION = '2.0';
@@ -203,6 +221,8 @@ export function verifyAuditExport(
   }
 
   const keys = buildKeyRegistry(resolveKeys(exportData, options));
+  const agentKeys =
+    options.agentKeys !== undefined ? buildAgentKeyRegistry(options.agentKeys) : undefined;
   const normalized: NormalizedEntry[] = entries.map((e) => {
     const base: NormalizedEntry = {
       scopeId: meta.recordId,
@@ -245,6 +265,7 @@ export function verifyAuditExport(
   const chain = verifyChain(normalized, keys, {
     requireKeyId: options.requireKeyId,
     requireOutOfBandKeys: options.requireOutOfBandKeys,
+    agentKeys,
   });
 
   return {
@@ -266,6 +287,7 @@ export function verifyAuditExport(
     optionalChecks: chain.optionalChecks,
     keyProvenance: chain.keyProvenance,
     unsignedProjectionFields: exportData.verificationGuide?.unsignedFields ?? [],
+    agentSignatures: chain.agentSignatures,
   };
 }
 
@@ -282,9 +304,11 @@ function earlyFailure(recordId: string, totalEntries: number, detail: string): V
       payload_binding: 'skipped_no_input',
       oidc_actor: 'skipped_no_input',
       key_temporal: 'skipped_no_input',
+      agent_signature: 'skipped_no_input',
     },
     keyProvenance: { outOfBand: 0, embedded: 0 },
     unsignedProjectionFields: [],
+    agentSignatures: { present: 0, verified: 0 },
   };
 }
 

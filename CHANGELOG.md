@@ -4,6 +4,20 @@ All notable changes to `@agledger/verify-core` will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## Unreleased
+
+### Added
+
+- **Offline agent-signature check.** `verifyAuditExport` takes `agentKeys`, the Ed25519 JWKs of agent ephemeral certs (the `publicKeyJwk` sent to `POST /v1/auth/oidc/cert`, also the `cnf.jwk` claim inside the `certJws`). Where an entry's signed payload carries an engine-validated `predicate.on_behalf_of.agent_signature` and its sealed cert thumbprint matches one of those keys, the signature is re-verified over the request-body hash, so the cert holder's signature is proven without taking the Server's word for it. A signature that does not verify, or is sealed in a shape nothing can verify, fails the new `CHAIN_AGENT_SIGNATURE_INVALID`. Keys are matched only through the RFC 7638 thumbprint the entry signed, so a key for another cert is never checked against it. `verifyChain` takes the same input as an `agentKeys` registry (`buildAgentKeyRegistry`).
+- `optionalChecks.agent_signature` reports whether that check ran, and `agentSignatures: { present, verified }` on the result counts the entries carrying an agent signature and those re-verified. Without `agentKeys` the check is reported `skipped_no_input` and verdicts are unchanged.
+- Primitives for the same check: `extractAgentSignatureClaim`, `ed25519JwkThumbprint`, `ed25519JwkToSpki`, `verifyAgentSignature`, `AGENT_SIGNATURE_CONTEXT`.
+
+### Changed
+
+- The conformance corpus is regenerated at API 1.8.0. Same vectors and expected codes as the 1.7.0 corpus, and all pass.
+- Verified against live API 1.8.0 output: record-lifecycle entries that sign the internal state (`state`, `previousState`, `newState`) beside the display status, the `AUTH_KEY_ROTATED` platform entry, and cert-signed and delegated creates all verify, and a rewritten internal state fails the payload binding check. No verification change was needed for them.
+- The README lists every check the verifier runs, and the doc comments on `optionalChecks` no longer say the payload binding check is dump-only.
+
 ## [1.4.2] - 2026-09-10
 
 ### Changed

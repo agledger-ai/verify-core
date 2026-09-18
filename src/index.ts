@@ -7,10 +7,12 @@ export { suggestion } from './failures.js';
 export type { FailureCode } from './failures.js';
 
 export {
+  buildAgentKeyRegistry,
   buildKeyRegistry,
   verifyChain,
 } from './chain.js';
 export type {
+  AgentKeyRegistry,
   KeySource,
   VerificationKey,
   KeyRegistry,
@@ -50,6 +52,11 @@ export {
   extractKid,
   extractOnBehalfOfClaim,
   extractTraceparentClaim,
+  extractAgentSignatureClaim,
+  ed25519JwkThumbprint,
+  ed25519JwkToSpki,
+  verifyAgentSignature,
+  AGENT_SIGNATURE_CONTEXT,
   decodePredicate,
   buildPredicateForRow,
   stripEnvelopeExtensions,
@@ -67,6 +74,9 @@ export type {
   CoseVerifyOutcome,
   KeyAlgorithm,
   ChainClaim,
+  AgentPublicKeyJwk,
+  AgentSignatureClaim,
+  AgentSignatureOutcome,
   ReceiptInclusionProof,
   ReceiptVerifyOutcome,
 } from './primitives.js';
