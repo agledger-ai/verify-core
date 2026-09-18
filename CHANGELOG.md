@@ -8,7 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
-- **The row copy of `on_behalf_of` and `traceparent` is bound to the signed entry.** The payload binding check compares the signed predicate with the one rebuilt from the row payload, and both sides leave out these two envelope extensions, so a rewritten, added or deleted `on_behalf_of` block in an export entry's `payload` (the copy a reader sees: the delegating identity, the cert, the agent signature) still verified. The verifier now re-extracts them from the row payload the way the engine does when it signs (an object `on_behalf_of`; a `traceparent` only in W3C v00 shape) and requires the result to equal what the entry signed. A mismatch fails `CHAIN_PAYLOAD_BINDING_MISMATCH`. Every live and corpus export still verifies.
+- **A row copy of `on_behalf_of` or `traceparent` is bound to the signed entry.** The payload binding check compares the signed predicate with the one rebuilt from the row payload, and both sides leave out these two envelope extensions, so a rewritten or added `on_behalf_of` block in an export entry's `payload` (the copy a reader sees: the delegating identity, the cert, the agent signature) still verified. When the row payload carries either one, it must now equal what the entry signed, extracted the way the engine does when it signs (an object `on_behalf_of`; a `traceparent` only in W3C v00 shape), or the entry fails `CHAIN_PAYLOAD_BINDING_MISMATCH`. A row without them is not a mismatch, because the engine also signs an `on_behalf_of` built from the request's authentication that never reaches the row; that identity stays held to the actor columns by the OIDC-actor check. Every live and corpus export still verifies.
 
 ### Added
 
