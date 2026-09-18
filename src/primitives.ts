@@ -1021,6 +1021,10 @@ export function stripEnvelopeExtensions(
  * comparison, so without this check a rewritten or added row copy would still
  * verify.
  *
+ * Anything else under those keys is ignored, as the engine ignores it: it
+ * lifts only an object `on_behalf_of` and a v00 `traceparent`, so a genuine
+ * older row holding another shape signed nothing for it.
+ *
  * A row without them is not a mismatch: the engine also signs an
  * `on_behalf_of` built from the request's authentication rather than from the
  * payload, and that one never reaches the row payload. Its identity is held to
@@ -1031,9 +1035,8 @@ export function envelopeExtensionsMatch(
   signedPredicate: Record<string, unknown>,
 ): boolean {
   const obo = rowPayload['on_behalf_of'];
-  if (obo !== undefined) {
-    const lifted = obo !== null && typeof obo === 'object' && !Array.isArray(obo);
-    if (!lifted || !deepEqual(obo, signedPredicate['on_behalf_of'])) return false;
+  if (obo !== null && typeof obo === 'object' && !Array.isArray(obo)) {
+    if (!deepEqual(obo, signedPredicate['on_behalf_of'])) return false;
   }
   const tp = rowPayload['traceparent'];
   if (typeof tp === 'string' && TRACEPARENT_REGEX.test(tp) && tp !== signedPredicate['traceparent']) {
