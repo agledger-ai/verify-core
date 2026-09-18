@@ -690,6 +690,135 @@ export function extractTraceparentClaim(payloadBstr: Uint8Array): string | null 
   }
 }
 
+// --- Agent signature (predicate.on_behalf_of.agent_signature) ---
+
+/**
+ * Domain-separation prefix the engine applies before verifying an agent's
+ * `X-Agent-Signature` at intake: the agent signs the UTF-8 bytes of this
+ * prefix followed by the lowercase hex sha256 of the raw request body (the
+ * hex string, not the digest bytes). Distinct from the cert proof-of-possession
+ * prefix, so one signature cannot be replayed as the other.
+ */
+export const AGENT_SIGNATURE_CONTEXT = 'agledger.agent.sig.v1\n';
+
+/** An Ed25519 public key in JWK form, as sent in `publicKeyJwk` at cert exchange. */
+export interface AgentPublicKeyJwk {
+  kty: 'OKP';
+  crv: 'Ed25519';
+  /** base64url of the raw 32-byte public key. */
+  x: string;
+}
+
+/**
+ * The agent-signature evidence the engine sealed into a chain entry, read from
+ * the signed payload. Fields are left `unknown` where the verifier must check
+ * their shape itself: a sealed value the engine never writes is a finding, not
+ * something to coerce.
+ */
+export interface AgentSignatureClaim {
+  /** `on_behalf_of.validated === true`: the engine vouched for the identity. */
+  validated: boolean;
+  /** `on_behalf_of.cert.id`, when a cert is sealed beside the signature. */
+  certId: string | null;
+  /** `on_behalf_of.cert.thumbprint`: `sha256:<hex>` RFC 7638 thumbprint of the cert's bound key. */
+  certThumbprint: string | null;
+  alg: unknown;
+  signature: unknown;
+  contentHash: unknown;
+}
+
+/**
+ * Read `predicate.on_behalf_of.agent_signature` and the cert beside it from a
+ * COSE_Sign1 payload bstr. Returns null when the entry carries no agent
+ * signature.
+ */
+export function extractAgentSignatureClaim(payloadBstr: Uint8Array): AgentSignatureClaim | null {
+  const obo = extractOnBehalfOfClaim(payloadBstr);
+  if (obo === null) return null;
+  const sig = obo['agent_signature'];
+  if (sig === undefined || sig === null) return null;
+  const sigObj =
+    typeof sig === 'object' && !Array.isArray(sig) ? (sig as Record<string, unknown>) : {};
+  const cert = obo['cert'];
+  const certObj =
+    cert !== null && typeof cert === 'object' && !Array.isArray(cert)
+      ? (cert as Record<string, unknown>)
+      : {};
+  return {
+    validated: obo['validated'] === true,
+    certId: typeof certObj['id'] === 'string' ? certObj['id'] : null,
+    certThumbprint: typeof certObj['thumbprint'] === 'string' ? certObj['thumbprint'] : null,
+    alg: sigObj['alg'],
+    signature: sigObj['signature'],
+    contentHash: sigObj['content_hash'],
+  };
+}
+
+const BASE64URL_32_BYTES = /^[A-Za-z0-9_-]{43}$/;
+
+/**
+ * RFC 7638 thumbprint of an Ed25519 JWK in the engine's `sha256:<hex>` form,
+ * or null when the value is not an Ed25519 public-key JWK. The members are
+ * hashed in the RFC's lexicographic order (`crv`, `kty`, `x`), which is what
+ * the engine's thumbprint function produces for an OKP key.
+ */
+export function ed25519JwkThumbprint(jwk: unknown): string | null {
+  if (jwk === null || typeof jwk !== 'object' || Array.isArray(jwk)) return null;
+  const { kty, crv, x } = jwk as Record<string, unknown>;
+  if (kty !== 'OKP' || crv !== 'Ed25519' || typeof x !== 'string' || !BASE64URL_32_BYTES.test(x)) {
+    return null;
+  }
+  if (Buffer.from(x, 'base64url').length !== 32) return null;
+  return `sha256:${sha256HexString(JSON.stringify({ crv, kty, x }))}`;
+}
+
+/** SPKI DER (base64) for an Ed25519 JWK, or null when it is not one. */
+export function ed25519JwkToSpki(jwk: unknown): string | null {
+  if (ed25519JwkThumbprint(jwk) === null) return null;
+  const raw = Buffer.from((jwk as AgentPublicKeyJwk).x, 'base64url');
+  return Buffer.concat([ED25519_SPKI_PREFIX, raw]).toString('base64');
+}
+
+export type AgentSignatureOutcome = 'ok' | 'invalid' | 'malformed' | 'unsupported';
+
+const CONTENT_HASH_PATTERN = /^sha256:([0-9a-f]{64})$/;
+const STANDARD_BASE64_64_BYTES = /^[A-Za-z0-9+/]{86}(==)?$/;
+
+/**
+ * Verify a sealed agent signature against the cert's Ed25519 key.
+ *
+ * - `ok`: the signature verifies over `AGENT_SIGNATURE_CONTEXT + <hex>`.
+ * - `invalid`: well formed, does not verify under this key.
+ * - `malformed`: a shape the engine never writes (alg other than EdDSA, a
+ *   content hash not `sha256:<hex64>`, a signature that is not 64 bytes of
+ *   standard base64). Nothing can verify it, which the engine also treats as
+ *   a break.
+ * - `unsupported`: this host cannot compute Ed25519 (an active OpenSSL FIPS
+ *   provider). NOT verified and NOT tamper evidence.
+ *
+ * What it proves: the holder of the cert's private key signed that content
+ * hash. It does not re-hash a request body; the export carries the hash, not
+ * the body.
+ */
+export function verifyAgentSignature(
+  spkiBase64: string,
+  claim: Pick<AgentSignatureClaim, 'alg' | 'signature' | 'contentHash'>,
+): AgentSignatureOutcome {
+  if (claim.alg !== 'EdDSA') return 'malformed';
+  if (typeof claim.contentHash !== 'string') return 'malformed';
+  const hashMatch = CONTENT_HASH_PATTERN.exec(claim.contentHash);
+  if (!hashMatch) return 'malformed';
+  if (typeof claim.signature !== 'string' || !STANDARD_BASE64_64_BYTES.test(claim.signature)) {
+    return 'malformed';
+  }
+  const sigBytes = Buffer.from(claim.signature, 'base64');
+  if (sigBytes.length !== 64) return 'malformed';
+  const ed25519 = algorithmByName('Ed25519');
+  if (ed25519 === null || !runtimeCanCompute(ed25519)) return 'unsupported';
+  const input = Buffer.from(`${AGENT_SIGNATURE_CONTEXT}${hashMatch[1]}`, 'utf8');
+  return verifyEd25519Bytes(spkiBase64, input, sigBytes) ? 'ok' : 'invalid';
+}
+
 // --- in-toto v1 predicate extraction + binding-integrity projection ---
 
 /**
