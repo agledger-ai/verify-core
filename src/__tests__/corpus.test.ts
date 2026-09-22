@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { verifyAuditExport } from '../audit-export.js';
 import type { RecordAuditExportInput, VerifyExportOptions } from '../audit-export.js';
 import type { FailureCode } from '../failures.js';
+import type { AgentPublicKeyJwk } from '../primitives.js';
 
 /**
  * EXPORT-kind conformance corpus runner.
@@ -42,6 +43,13 @@ interface ManifestVector {
     keysFile?: string;
     requireKeyId?: string;
     requireOutOfBandKeys?: boolean;
+    /**
+     * A JSON array of agent cert public keys (JWKs). Unmapped, a vector that
+     * expects `CHAIN_AGENT_SIGNATURE_INVALID` runs with no agent keys, the
+     * check reports `skipped_no_input`, the export passes, and the suite fails
+     * on a vector that was never actually exercised.
+     */
+    agentKeysFile?: string;
   };
   expectSignatureCoverage?: SignatureCoverageAssertion;
   note?: string;
@@ -75,6 +83,9 @@ describe('verify-core conformance corpus (export kind)', () => {
       }
       if (vector.options?.requireKeyId) options.requireKeyId = vector.options.requireKeyId;
       if (vector.options?.requireOutOfBandKeys) options.requireOutOfBandKeys = true;
+      if (vector.options?.agentKeysFile) {
+        options.agentKeys = loadJson<AgentPublicKeyJwk[]>(vector.options.agentKeysFile);
+      }
 
       const result = verifyAuditExport(exportData, options);
 
