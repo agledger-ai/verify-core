@@ -37,6 +37,7 @@ import {
   ed25519JwkThumbprint,
   ed25519JwkToSpki,
   extractAgentSignatureClaim,
+  extractActorClaim,
   extractChainClaim,
   extractKid,
   extractOnBehalfOfClaim,
@@ -144,6 +145,17 @@ export interface NormalizedEntry {
     sub: string | null;
     synthesized: boolean | undefined;
   };
+  /**
+   * Inputs for the actor-attribution cross-check: the row columns a report
+   * displays as "who did this". The export carries them as `actorId` /
+   * `actorRole` / `actorOwnerId`, the dump as `actor_key_id` / `actor_role` /
+   * `actor_owner_id`. Absent on older artifacts, which skips the check.
+   */
+  actorAttribution?: {
+    actorId: string | null;
+    actorRole: string | null;
+    actorOwnerId: string | null;
+  };
 }
 
 /**
@@ -152,7 +164,12 @@ export interface NormalizedEntry {
  * had its cert key supplied by the caller (`agentKeys`); neither the export
  * nor the dump carries cert public keys.
  */
-export type OptionalCheck = 'payload_binding' | 'oidc_actor' | 'key_temporal' | 'agent_signature';
+export type OptionalCheck =
+  | 'payload_binding'
+  | 'oidc_actor'
+  | 'actor_attribution'
+  | 'key_temporal'
+  | 'agent_signature';
 export type CheckApplicability = 'applied' | 'skipped_no_input';
 
 export interface SignatureOutcome {
@@ -246,6 +263,7 @@ export function verifyChain(
   const optionalChecks: Record<OptionalCheck, CheckApplicability> = {
     payload_binding: 'skipped_no_input',
     oidc_actor: 'skipped_no_input',
+    actor_attribution: 'skipped_no_input',
     key_temporal: 'skipped_no_input',
     agent_signature: 'skipped_no_input',
   };
@@ -464,6 +482,42 @@ function verifyEntry(
       'CHAIN_COSE_HEADER_MISMATCH',
       `Signed protected-header chain claim (position=${chainClaim?.position ?? 'null'}, prev=${chainClaim?.previous_hash ?? 'null'}) diverges from row columns (position=${entry.chainPosition}, prev=${entry.previousHash ?? 'null'}).`,
     );
+  }
+
+  // Input-gated: actor attribution. The row's actorId/actorOwnerId columns are
+  // the projection a report displays as "who did this", and the engine's own
+  // export guide names them as the trustworthy attribution while listing only
+  // actorDisplayName / actorOwnerType / humanReadableLabel as unsigned. They
+  // are signature-covered, at CWT_Claims label 15 -> private label -65539, so
+  // a rewritten column is a re-attribution of the action to another actor and
+  // must not verify. Same shape as the signed-kid check above: compare the
+  // column against the signed claim, and skip only when one side is absent
+  // (an older engine that never carried the claim, or an artifact that does
+  // not carry the columns).
+  const attribution = entry.actorAttribution;
+  if (attribution) {
+    const actorClaim = extractActorClaim(parts.protectedBstr);
+    if (actorClaim) {
+      optionalChecks.actor_attribution = 'applied';
+      const mismatches: string[] = [];
+      if (attribution.actorId !== null && attribution.actorId !== actorClaim.key_id) {
+        mismatches.push(`actorId=${attribution.actorId} vs signed ${actorClaim.key_id}`);
+      }
+      if (attribution.actorOwnerId !== null && attribution.actorOwnerId !== actorClaim.owner_id) {
+        mismatches.push(`actorOwnerId=${attribution.actorOwnerId} vs signed ${actorClaim.owner_id}`);
+      }
+      if (attribution.actorRole !== null && attribution.actorRole !== actorClaim.role) {
+        mismatches.push(`actorRole=${attribution.actorRole} vs signed ${actorClaim.role}`);
+      }
+      if (mismatches.length > 0) {
+        return fail(
+          scopeId,
+          expectedPosition,
+          'CHAIN_ACTOR_ATTRIBUTION_MISMATCH',
+          `Row actor columns diverge from the signature-covered actor claim (${mismatches.join('; ')}).`,
+        );
+      }
+    }
   }
 
   // Input-gated: binding-integrity. Runs whenever the row payload is present:

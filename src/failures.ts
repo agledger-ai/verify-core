@@ -72,6 +72,7 @@ export type FailureCode =
   | 'CHAIN_ALG_MISMATCH'
   | 'CHAIN_UNSUPPORTED_ALGORITHM'
   | 'CHAIN_SIGNING_KEY_DRIFT'
+  | 'CHAIN_ACTOR_ATTRIBUTION_MISMATCH'
   | 'CHAIN_AGENT_SIGNATURE_INVALID'
   // --- vault checkpoints ---
   | 'CHECKPOINT_ROW_MISSING'
@@ -129,6 +130,8 @@ const SUGGESTIONS: Record<FailureCode, string> = {
     'The entry\'s trusted verification key commits to a signature algorithm that could not be computed, either because this verifier build does not implement it or because the host runtime refused it (an active OpenSSL FIPS provider carries no EdDSA). The chain is NOT verified, and this is NOT tamper evidence: the signature was never checked. Upgrade the verifier, or re-run on a host without the restriction. Never treat this result as a pass.',
   CHAIN_SIGNING_KEY_DRIFT:
     'The entry\'s signingKeyId column names a different key than the signature-covered kid in the COSE protected header. The column is a denormalized convenience and was rewritten after signing (possibly to point verification at another key). Trust the signed kid; treat the row as tampered.',
+  CHAIN_ACTOR_ATTRIBUTION_MISMATCH:
+    'The entry\'s actorId / actorOwnerId columns name a different actor than the signature-covered actor claim in the COSE protected header (CWT_Claims label 15, private label -65539). The columns are the projection a report displays and they were rewritten after signing, re-attributing the action to another actor. Trust the signed claim; treat the row as tampered and re-obtain the export from the operator.',
   CHAIN_AGENT_SIGNATURE_INVALID:
     'The agent signature sealed in predicate.on_behalf_of.agent_signature does not verify under the supplied key whose RFC 7638 thumbprint the entry itself names, or is sealed in a shape nothing can verify. The engine checks this signature at intake and the envelope signature says the engine wrote it, so this is not a caller mistake: treat the agent attribution of this entry as unproven and escalate to the operator.',
   CHECKPOINT_ROW_MISSING:

@@ -4,9 +4,11 @@ All notable changes to `@agledger/verify-core` will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
-## [1.5.0] - 2026-09-18
+## [1.5.0] - 2026-09-21
 
 ### Fixed
+
+- **Actor attribution is verified, not displayed on trust.** An audit export's own verification guide names `actorDisplayName`, `actorOwnerType` and `humanReadableLabel` as unsigned display projections and tells the auditor that the attribution to rely on is the `actorId`/`actorOwnerId` UUID. Those two, and `actorRole`, are signature-covered in the COSE protected header (CWT_Claims label 15, private label -65539), and nothing compared them against it: an export or dump row could be re-attributed to another actor, changing nothing else, and still verify with out-of-band keys. They are now cross-checked per entry, and a divergence fails the new `CHAIN_ACTOR_ATTRIBUTION_MISMATCH`. An artifact that carries no actor columns, or an envelope from an engine that predates the claim, is reported `optionalChecks.actor_attribution: skipped_no_input` rather than passed. `extractActorClaim` is exported for callers that want the signed value themselves.
 
 - **A row copy of `on_behalf_of` or `traceparent` is bound to the signed entry.** The payload binding check compares the signed predicate with the one rebuilt from the row payload, and both sides leave out these two envelope extensions, so a rewritten or added `on_behalf_of` block in an export entry's `payload` (the copy a reader sees: the delegating identity, the cert, the agent signature) still verified. When the row payload carries an object `on_behalf_of` or a W3C v00 `traceparent`, the only shapes the engine lifts into the signed entry, it must now equal what the entry signed, or the entry fails `CHAIN_PAYLOAD_BINDING_MISMATCH`. Any other shape under those keys is ignored, as the engine ignores it. A row without them is not a mismatch, because the engine also signs an `on_behalf_of` built from the request's authentication that never reaches the row; that identity stays held to the actor columns by the OIDC-actor check. Every live and corpus export still verifies.
 

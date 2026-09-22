@@ -64,12 +64,16 @@ if (!result.valid) {
   `CHAIN_PAYLOAD_BINDING_MISMATCH`.
 - **OIDC actor**: the row's `actorOidcIss` / `actorOidcSub` match the identity
   signed in `predicate.on_behalf_of`.
+- **Actor attribution**: the row's `actorId`, `actorRole` and `actorOwnerId`,
+  the attribution an export's own guide tells an auditor to rely on, match the
+  actor claim signed in the protected header, so an export re-attributed to
+  another actor fails `CHAIN_ACTOR_ATTRIBUTION_MISMATCH`.
 - **Key validity windows**: each entry was written inside its signing key's
   activation window.
 - **Agent signatures**, when you supply the agent's cert key (below).
 
-The payload, OIDC and key-window checks run when the export carries their
-inputs, which every current Server does. The result's `optionalChecks` says
+The payload, OIDC, attribution and key-window checks run when the export
+carries their inputs, which every current Server does. The result's `optionalChecks` says
 which ran, so "not checked" never reads as "passed".
 
 ## Agent signatures
