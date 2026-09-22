@@ -642,6 +642,59 @@ export function extractChainClaim(protectedBstr: Uint8Array): ChainClaim | null 
   }
 }
 
+/**
+ * Extract the actor identity claim (`-65539`) from a COSE_Sign1 protected
+ * header. It is nested inside CWT_Claims (RFC 9597, label 15) rather than
+ * sitting at the outer header level, because it IS an identity statement: the
+ * engine keeps the outer level to IANA-known labels plus chain mechanics.
+ *
+ * `key_id` and `owner_id` are UUIDs the engine encodes as 16-byte CBOR byte
+ * strings, returned here in canonical lowercase-hyphenated form so they
+ * compare directly against the export's `actorId` / `actorOwnerId` columns.
+ * Returns null when the claim is missing or malformed (engines older than the
+ * claim, or an envelope that will not decode) so the caller can skip rather
+ * than fail an entry that never carried it.
+ */
+export interface ActorClaim {
+  key_id: string;
+  role: string;
+  owner_id: string;
+}
+
+const COSE_HEADER_CWT_CLAIMS = 15;
+const AGLEDGER_LABEL_ACTOR = -65539;
+const ACTOR_SUBLABEL_KEY_ID = 1;
+const ACTOR_SUBLABEL_ROLE = 2;
+const ACTOR_SUBLABEL_OWNER_ID = 3;
+
+/** 16 raw bytes to canonical lowercase-hyphenated UUID; null for any other length. */
+function bytesToUuid(bytes: Uint8Array): string | null {
+  if (bytes.length !== 16) return null;
+  const hex = Buffer.from(bytes).toString('hex');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
+export function extractActorClaim(protectedBstr: Uint8Array): ActorClaim | null {
+  try {
+    const ph = cborDecode(protectedBstr, { useMaps: true }) as Map<number, unknown>;
+    const cwt = ph.get(COSE_HEADER_CWT_CLAIMS);
+    if (!(cwt instanceof Map)) return null;
+    const actor = cwt.get(AGLEDGER_LABEL_ACTOR);
+    if (!(actor instanceof Map)) return null;
+    const keyIdBytes = actor.get(ACTOR_SUBLABEL_KEY_ID);
+    const role = actor.get(ACTOR_SUBLABEL_ROLE);
+    const ownerIdBytes = actor.get(ACTOR_SUBLABEL_OWNER_ID);
+    if (!(keyIdBytes instanceof Uint8Array) || !(ownerIdBytes instanceof Uint8Array)) return null;
+    if (typeof role !== 'string') return null;
+    const keyId = bytesToUuid(keyIdBytes);
+    const ownerId = bytesToUuid(ownerIdBytes);
+    if (keyId === null || ownerId === null) return null;
+    return { key_id: keyId, role, owner_id: ownerId };
+  } catch {
+    return null;
+  }
+}
+
 // --- Optional envelope extensions (OIDC on-behalf-of, traceparent) ---
 
 const TRACEPARENT_REGEX = /^00-[0-9a-f]{32}-[0-9a-f]{16}-[0-9a-f]{2}$/;

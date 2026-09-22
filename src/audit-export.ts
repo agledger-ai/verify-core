@@ -46,6 +46,16 @@ export interface AuditExportEntryInput {
   actorOidcSub?: string | null;
   /** Tri-state from `audit_vault.actor_oidc_synthesized` (engine ≥ v0.26.x). Marker for the OIDC-actor check. */
   actorOidcSynthesized?: boolean | null;
+  /**
+   * API-key id of the credential that performed this state-change, mirroring
+   * the row's `actor_key_id`. Signature-covered at CWT_Claims label 15 ->
+   * private label -65539; present → the actor-attribution check runs.
+   */
+  actorId?: string | null;
+  /** Role of that credential (`admin` / `agent` / `platform`), mirroring `actor_role`. */
+  actorRole?: string | null;
+  /** Owner id of that credential, mirroring `actor_owner_id`. */
+  actorOwnerId?: string | null;
   /** The record this entry belongs to; pairs with `payload`/`entryType` to drive the binding check. */
   recordId?: string | null;
   /** The audit-vault entry type (e.g. `RECORD_CREATED`); drives the binding check's predicate reconstruction. */
@@ -82,8 +92,10 @@ export interface RecordAuditExportInput {
    * Self-describing verification guidance the engine ships in the export.
    * `unsignedFields` lists per-entry fields that are UNSIGNED display projections
    * (e.g. `actorDisplayName`) resolved at export time, not covered by the COSE_Sign1
-   * signature. A PASS does NOT vouch for these labels; signed attribution is the
-   * `actorOwnerId`/`actorId` UUID. Surfaced on the result so a verdict can say so.
+   * signature. A PASS does NOT vouch for these labels. The attribution the guide
+   * points at instead, `actorOwnerId`/`actorId`, IS signature-covered and IS
+   * cross-checked here (`actor_attribution`). Surfaced on the result so a verdict
+   * can say which labels it does not stand behind.
    */
   verificationGuide?: {
     unsignedFields?: string[];
@@ -165,6 +177,9 @@ export interface VerifyExportResult {
   /**
    * Which input-gated checks ran on this export.
    *
+   * - `actor_attribution` flips to `applied` when the export carries the
+   *   `actorId` / `actorRole` / `actorOwnerId` columns and the envelope carries
+   *   the signed actor claim, which is every current export.
    * - `payload_binding`, `oidc_actor` and `key_temporal` flip to `applied`
    *   when the export wire carries their inputs (engine >= v0.26.x: per-entry
    *   `payload` + `entryType`, `actorOidcSynthesized`, `createdAt`, and
@@ -186,9 +201,11 @@ export interface VerifyExportResult {
   /**
    * Per-entry fields the export self-describes as UNSIGNED display projections
    * (from `verificationGuide.unsignedFields`), e.g. `actorDisplayName`.
-   * A valid signature does NOT cover these; signed attribution is the
-   * `actorOwnerId`/`actorId` UUID. Empty when the export carries no such guidance.
-   * A caller surfacing a PASS should warn that these labels are not vouched for.
+   * A valid signature does NOT cover these; the attribution that IS covered,
+   * `actorOwnerId`/`actorId`, is cross-checked against the signed actor claim
+   * (see `optionalChecks.actor_attribution`). Empty when the export carries no
+   * such guidance. A caller surfacing a PASS should warn that these labels are
+   * not vouched for.
    */
   unsignedProjectionFields: string[];
   /** Agent signatures present on the chain vs re-verified offline (see `agentKeys`). */
@@ -247,6 +264,19 @@ export function verifyAuditExport(
         payload: e.payload,
       };
     }
+    // Actor attribution: the export's own guide tells an auditor that
+    // `actorId`/`actorOwnerId` ARE the trustworthy attribution (only
+    // actorDisplayName / actorOwnerType / humanReadableLabel are listed as
+    // unsigned projections), so those columns are cross-checked against the
+    // signed actor claim rather than displayed on trust. Any one of the three
+    // present is enough to run the check on what is there.
+    if (e.actorId !== undefined || e.actorOwnerId !== undefined || e.actorRole !== undefined) {
+      base.actorAttribution = {
+        actorId: e.actorId ?? null,
+        actorRole: e.actorRole ?? null,
+        actorOwnerId: e.actorOwnerId ?? null,
+      };
+    }
     if (e.createdAt) base.createdAt = e.createdAt;
     // The synthesized flag is the marker that the export carries the OIDC
     // wire shape at all. Older exports omit it entirely; new exports always
@@ -303,6 +333,7 @@ function earlyFailure(recordId: string, totalEntries: number, detail: string): V
     optionalChecks: {
       payload_binding: 'skipped_no_input',
       oidc_actor: 'skipped_no_input',
+      actor_attribution: 'skipped_no_input',
       key_temporal: 'skipped_no_input',
       agent_signature: 'skipped_no_input',
     },
