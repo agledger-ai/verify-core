@@ -24,7 +24,8 @@ import type { NormalizedEntry, VerificationKey } from '../chain.js';
  *   - dispatch binds to the trusted key, so the attacker-controlled header can
  *     select nothing; the header alg is only asserted equal;
  *   - the all-zero unsigned sentinel is evaluated at the key's expected
- *     signature length, after algorithm resolution;
+ *     signature length, after algorithm resolution, and on an entry that
+ *     names a key it is a signature failure, never an unsigned entry;
  *   - the signature-covered kid (label 4) is cross-checked against the row's
  *     signingKeyId column (engine mirror: signing_key_drift);
  *   - untagged COSE_Sign1 is rejected, matching the engine's decoder.
@@ -259,7 +260,7 @@ describe('forward compatibility inside the Ed25519 family', () => {
   });
 });
 
-describe('unsigned sentinel is key-length-derived and policy-gated', () => {
+describe('unsigned sentinel is key-length-derived, and fails on an entry that names a key', () => {
   const zeroSig = buildEnvelope({
     alg: -8,
     position: 1,
@@ -268,27 +269,32 @@ describe('unsigned sentinel is key-length-derived and policy-gated', () => {
     signatureOverride: new Uint8Array(64),
   });
 
-  it('64 zero bytes under an Ed25519 key reads unsigned without a policy', () => {
+  // The engine writes a key id only beside a signature it made with that key,
+  // and grades a zeroed slot under a named key `signature_invalid`. An entry
+  // naming a key therefore cannot be unsigned, with or without a policy.
+  it('64 zero bytes under an Ed25519 key read unsigned, and the entry fails CHAIN_SIGNATURE_INVALID', () => {
     expect(verifyCoseSign1(zeroSig, edKey.spkiBase64)).toBe('unsigned');
     const result = verifyChain([toEntry(zeroSig, 1, null, ED_KEY_ID)], registry(edKey));
-    expect(result.valid).toBe(true);
-    expect(result.signatureCoverage.unsigned).toBe(1);
+    expect(result.valid).toBe(false);
+    expect(result.brokenAt?.code).toBe('CHAIN_SIGNATURE_INVALID');
+    expect(result.entries[0]?.signature).toBe('invalid');
+    expect(result.signatureCoverage).toMatchObject({ signed: 0, unsigned: 0, skipped: 0 });
   });
 
-  it('an all-zero signature on an entry claiming a key fails under requireOutOfBandKeys', () => {
+  it('an all-zero signature on an entry claiming a key fails the same way under requireOutOfBandKeys', () => {
     const result = verifyChain([toEntry(zeroSig, 1, null, ED_KEY_ID)], registry(edKey), {
       requireOutOfBandKeys: true,
     });
     expect(result.valid).toBe(false);
-    expect(result.brokenAt?.code).toBe('CHAIN_KEY_POLICY_VIOLATION');
+    expect(result.brokenAt?.code).toBe('CHAIN_SIGNATURE_INVALID');
   });
 
-  it('an all-zero signature fails under requireKeyId even when the id matches', () => {
+  it('an all-zero signature fails the same way under requireKeyId even when the id matches', () => {
     const result = verifyChain([toEntry(zeroSig, 1, null, ED_KEY_ID)], registry(edKey), {
       requireKeyId: ED_KEY_ID,
     });
     expect(result.valid).toBe(false);
-    expect(result.brokenAt?.code).toBe('CHAIN_KEY_POLICY_VIOLATION');
+    expect(result.brokenAt?.code).toBe('CHAIN_SIGNATURE_INVALID');
   });
 
   it('a zero fill of a DIFFERENT length is not the sentinel (ML-DSA-length regression)', () => {

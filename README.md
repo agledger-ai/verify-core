@@ -58,7 +58,14 @@ if (!result.valid) {
   matched verification key, under the algorithm its SPKI commits to (Ed25519
   or ES256; anything else fails closed as `CHAIN_UNSUPPORTED_ALGORITHM`).
 - **Signed-kid binding**: the row's `signingKeyId` names the key the protected
-  header signed.
+  header signed. An entry that names a key but carries an all-zero signature
+  fails `CHAIN_SIGNATURE_INVALID`.
+- **Unsigned entries**: an entry with no `signingKeyId` fails
+  `CHAIN_ENTRY_UNSIGNED` when it follows a signed entry in its chain, or when
+  it was written at or after the earliest `activatedAt` in the key set
+  (export `signingKeyWindows` and your own keys, retired keys included).
+  Earlier unsigned entries, written before the install had a key, count as
+  `signatureCoverage.skipped` rather than a break.
 - **Payload binding**: each entry's human-readable `payload` still matches the
   predicate inside the signed bytes, so a rewritten view of the record fails
   `CHAIN_PAYLOAD_BINDING_MISMATCH`.
