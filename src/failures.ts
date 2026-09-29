@@ -38,6 +38,15 @@
  *   - CHAIN_EMPTY (new)        a chain/vault with nothing to verify is a non-clean
  *                                verdict, never a silent pass.
  *
+ * Later additions:
+ *   - CHAIN_ENTRY_UNSIGNED     engine mirror of `signature_missing`: an entry with
+ *                                no signing key id after a signed entry in its
+ *                                chain, or written at or after the earliest
+ *                                activatedAt in the key set. Earlier unsigned
+ *                                entries stay reduced coverage.
+ *   - CHECKPOINT_UNSIGNED      engine mirror of `checkpoint_unsigned`: the same
+ *                                instant, applied to an unsigned checkpoint.
+ *
  * Server-side cert re-checks are not mirrored here. The engine's chain
  * verification also reports `cert_missing`, `cert_actor_drift`,
  * `cert_window_drift`, `cert_expired` and `agent_signature_invalid`, by
@@ -74,10 +83,12 @@ export type FailureCode =
   | 'CHAIN_SIGNING_KEY_DRIFT'
   | 'CHAIN_ACTOR_ATTRIBUTION_MISMATCH'
   | 'CHAIN_AGENT_SIGNATURE_INVALID'
+  | 'CHAIN_ENTRY_UNSIGNED'
   // --- vault checkpoints ---
   | 'CHECKPOINT_ROW_MISSING'
   | 'CHECKPOINT_HASH_MISMATCH'
   | 'CHECKPOINT_SIGNATURE_INVALID'
+  | 'CHECKPOINT_UNSIGNED'
   // --- org_admin_reads Merkle log + STH ---
   | 'TENANT_READ_LEAF_HASH_MISMATCH'
   | 'TENANT_READ_LEAF_INDEX_GAP'
@@ -134,12 +145,16 @@ const SUGGESTIONS: Record<FailureCode, string> = {
     'The entry\'s actorId / actorOwnerId columns name a different actor than the signature-covered actor claim in the COSE protected header (CWT_Claims label 15, private label -65539). The columns are the projection a report displays and they were rewritten after signing, re-attributing the action to another actor. Trust the signed claim; treat the row as tampered and re-obtain the export from the operator.',
   CHAIN_AGENT_SIGNATURE_INVALID:
     'The agent signature sealed in predicate.on_behalf_of.agent_signature does not verify under the supplied key whose RFC 7638 thumbprint the entry itself names, or is sealed in a shape nothing can verify. The engine checks this signature at intake and the envelope signature says the engine wrote it, so this is not a caller mistake: treat the agent attribution of this entry as unproven and escalate to the operator.',
+  CHAIN_ENTRY_UNSIGNED:
+    'The entry carries no signing key id where the install could not have written an unsigned entry: after a signed entry in the same chain, or at or after the earliest activation time in the signing key set (retired keys included). From that instant every writer holds a registered key, so this is what a writer without one leaves on the chain, or a signed row whose key id was nulled. Treat the entry as forged and escalate to the operator. Unsigned entries from before the first key activation stay reduced signature coverage, not a break.',
   CHECKPOINT_ROW_MISSING:
     'A signed checkpoint anchors a position that has no matching chain row. The chain was truncated below a checkpoint (out-of-band DELETE/TRUNCATE). The checkpoint is proof of the missing rows.',
   CHECKPOINT_HASH_MISMATCH:
     'A checkpoint\'s payloadHash does not match the chain row at its position. The chain diverged from what was checkpointed. Treat the chain as tampered.',
   CHECKPOINT_SIGNATURE_INVALID:
     'A checkpoint\'s COSE_Sign1 signature did not verify. The checkpoint was forged or altered. Re-run with out-of-band verification keys.',
+  CHECKPOINT_UNSIGNED:
+    'A checkpoint carries no signing key id but was written at or after the earliest activation time in the signing key set (retired keys included), when every writer holds a registered key. The checkpoint was forged or its key id nulled, and nothing it anchors can be trusted. Escalate to the operator.',
   TENANT_READ_LEAF_HASH_MISMATCH:
     'An org_admin_reads leaf hash does not match sha256(cose_sign1). The read-log leaf was altered after recording.',
   TENANT_READ_LEAF_INDEX_GAP:

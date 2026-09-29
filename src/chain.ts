@@ -25,8 +25,13 @@
  *     NEVER folded into a green verdict.
  *
  * Failure ordering is fixed so `brokenAt` is deterministic. The null-key
- * signature skip happens LAST, after the binding/OIDC checks, so a row written
- * without a signing key is still subject to every structural check.
+ * branch comes LAST, after the binding/OIDC checks, so a row written without a
+ * signing key is still subject to every structural check, and a tamper finding
+ * on it is reported under its own code rather than as CHAIN_ENTRY_UNSIGNED.
+ * That branch grades the entry the way the engine does: an unsigned entry
+ * after a signed one in its chain, or written at or after the earliest key
+ * activation (`signingSince`), is CHAIN_ENTRY_UNSIGNED; an earlier one is a
+ * `skipped` signature, reduced coverage rather than a break.
  */
 import {
   buildPredicateForRow,
@@ -176,9 +181,14 @@ export interface SignatureOutcome {
   /**
    * - `ok` / `invalid` / `decode-fail`: the signature was checked (and passed,
    *   failed, or the envelope would not decode).
-   * - `unsigned`: the entry carries no signature by design.
+   * - `unsigned`: retained for type compatibility; `verifyChain` no longer
+   *   produces it. An all-zero signature on an entry that names a key is
+   *   `invalid` (CHAIN_SIGNATURE_INVALID), as the engine grades it.
    * - `skipped`: the chain is intact but this entry has no signing key, so the
-   *   signature check was deliberately not run (engine booted without a key).
+   *   signature check was deliberately not run. Only an entry written before
+   *   the install began signing gets here: before any signed entry in its
+   *   chain and before the earliest key activation. Any other unsigned entry
+   *   fails CHAIN_ENTRY_UNSIGNED.
    * - `not-checked`: a structural/chain check failed at or before this entry,
    *   so verification short-circuited before reaching the signature. Reads as a
    *   consequence of an upstream break, never as a benign skip.
@@ -243,6 +253,69 @@ export interface VerifyChainOptions {
    * offline; a failure is CHAIN_AGENT_SIGNATURE_INVALID.
    */
   agentKeys?: AgentKeyRegistry;
+  /**
+   * The instant this install began signing: the earliest `activatedAt` across
+   * its whole signing key set, retired keys included. An entry with a null
+   * `signingKeyId` whose `createdAt` is at or after it fails
+   * CHAIN_ENTRY_UNSIGNED.
+   *
+   * Omitted, it is derived from `keys` (`earliestKeyActivation`), which is
+   * right whenever `keys` is the whole key set, as it is on the dump path.
+   * Pass it when the caller knows windows for keys it has no public key for.
+   * `null` says the key set carries no activation time, so only the other
+   * half of the rule (an unsigned entry after a signed one) applies. A string
+   * that does not parse as a date throws `TypeError` rather than silently
+   * switching the check off.
+   */
+  signingSince?: string | null;
+}
+
+/**
+ * The earliest `activatedAt` among `keys`, as the ISO string it was given in,
+ * or `null` when no key carries a parseable one. This is the instant from
+ * which the engine treats every chain entry and checkpoint as required to be
+ * signed; pass every key the verifier knows, retired ones included, since the
+ * engine reads it as `min(activated_at)` over its whole key registry.
+ */
+export function earliestKeyActivation(
+  keys: Iterable<{ activatedAt?: string | null }>,
+): string | null {
+  let earliest: { at: number; iso: string } | null = null;
+  for (const k of keys) {
+    if (typeof k.activatedAt !== 'string') continue;
+    const at = Date.parse(k.activatedAt);
+    if (Number.isNaN(at)) continue;
+    if (earliest === null || at < earliest.at) earliest = { at, iso: k.activatedAt };
+  }
+  return earliest?.iso ?? null;
+}
+
+/**
+ * Whether a row with no signing key id, written at `writtenAt`, falls inside
+ * the era in which the install signs everything: at or after `signingSince`
+ * (see `earliestKeyActivation`). This is the rule for an unsigned checkpoint
+ * (CHECKPOINT_UNSIGNED) and the time half of the rule for an unsigned entry
+ * (CHAIN_ENTRY_UNSIGNED). False when either time is absent or unparseable:
+ * without both, the verifier cannot place the row, and the row stays what it
+ * was before this rule existed.
+ */
+export function writtenWhileSigning(
+  writtenAt: string | null | undefined,
+  signingSince: string | null | undefined,
+): boolean {
+  if (!writtenAt || !signingSince) return false;
+  const written = Date.parse(writtenAt);
+  const since = Date.parse(signingSince);
+  if (Number.isNaN(written) || Number.isNaN(since)) return false;
+  return written >= since;
+}
+
+/** What the walk knows about whether an unsigned entry was allowed at this point. */
+interface MustSign {
+  /** An earlier entry in this chain carries a signing key id. */
+  signedBefore: boolean;
+  /** `VerifyChainOptions.signingSince`, resolved. */
+  signingSince: string | null;
 }
 
 /**
@@ -287,6 +360,17 @@ export function verifyChain(
     };
   }
 
+  let signingSince: string | null;
+  if (options.signingSince === undefined) {
+    signingSince = earliestKeyActivation(keys.values());
+  } else {
+    signingSince = options.signingSince;
+    if (signingSince !== null && Number.isNaN(Date.parse(signingSince))) {
+      throw new TypeError(`signingSince must be an ISO-8601 time or null (got ${JSON.stringify(signingSince)}).`);
+    }
+  }
+  const mustSign: MustSign = { signedBefore: false, signingSince };
+
   let previousHash: string | null = null;
   for (let i = 0; i < sorted.length; i++) {
     const entry = sorted[i]!;
@@ -298,7 +382,11 @@ export function verifyChain(
       keys,
       options,
       optionalChecks,
+      mustSign,
     );
+    // As the engine's walk does: any earlier row naming a key, whatever its own
+    // verdict, means this chain was already being signed.
+    if (entry.signingKeyId !== null) mustSign.signedBefore = true;
     if (result.valid) {
       result = checkAgentSignature(entry, result, options.agentKeys, optionalChecks, agentSignatures);
     }
@@ -413,6 +501,7 @@ function verifyEntry(
   keys: KeyRegistry,
   options: VerifyChainOptions,
   optionalChecks: Record<OptionalCheck, CheckApplicability>,
+  mustSign: MustSign,
 ): ChainEntryResult {
   const { scopeId } = entry;
 
@@ -560,6 +649,29 @@ function verifyEntry(
   // and fails CHAIN_SIGNATURE_MISSING_KEY below: a truthiness shortcut here
   // would let a tampered signingKeyId:"" row skip its signature check.
   if (entry.signingKeyId === null) {
+    // Engine mirror of `signature_missing`. An unsigned entry is reduced
+    // coverage only where the install had not yet begun to sign: before any
+    // signed entry in this chain, and before the earliest key activation.
+    // Anywhere else no process of the install could have written it; it is
+    // what a writer holding no key leaves on the tip, or a signed row whose
+    // key id was nulled. Checked ahead of the caller's key policy because it
+    // is evidence about the chain itself, whatever policy the run applies.
+    if (mustSign.signedBefore) {
+      return fail(
+        scopeId,
+        expectedPosition,
+        'CHAIN_ENTRY_UNSIGNED',
+        'Entry has no signingKeyId but follows a signed entry in the same chain.',
+      );
+    }
+    if (writtenWhileSigning(entry.createdAt, mustSign.signingSince)) {
+      return fail(
+        scopeId,
+        expectedPosition,
+        'CHAIN_ENTRY_UNSIGNED',
+        `Entry has no signingKeyId but was written ${entry.createdAt}, at or after the earliest signing key activation ${mustSign.signingSince}.`,
+      );
+    }
     // Fail closed under a key policy: a high-assurance run that requires a
     // specific key (or out-of-band keys) must NOT accept an unsigned/null-key
     // entry as valid; otherwise an attacker forges an entry, nulls its
@@ -650,19 +762,18 @@ function verifyEntry(
 
   const outcome = verifyCoseSign1(envelopeBytes, key.spkiBase64);
   if (outcome === 'unsigned') {
-    // An all-zero signature slot on an entry that CLAIMS a signing key. Under
-    // a key policy this must fail: an auditor who demanded signed entries
-    // (requireKeyId / requireOutOfBandKeys) must never count a zeroed
-    // signature as green just because the policy gates above passed.
-    if (options.requireKeyId || options.requireOutOfBandKeys) {
-      return fail(
-        scopeId,
-        expectedPosition,
-        'CHAIN_KEY_POLICY_VIOLATION',
-        `Entry claims signingKeyId=${entry.signingKeyId} but carries an all-zero signature; this run requires signed entries (requireKeyId / requireOutOfBandKeys).`,
-      );
-    }
-    return { scopeId, position: expectedPosition, valid: true, signature: 'unsigned' };
+    // An all-zero signature slot on an entry that CLAIMS a signing key. The
+    // engine writes a key id only beside a signature it made with that key,
+    // and fails this shape `signature_invalid`, so it is a forged or wiped
+    // signature, never an unsigned entry. (A genuinely unsigned entry carries
+    // a null signingKeyId and is graded above.)
+    return fail(
+      scopeId,
+      expectedPosition,
+      'CHAIN_SIGNATURE_INVALID',
+      `Entry claims signingKeyId=${entry.signingKeyId} but carries an all-zero signature.`,
+      'invalid',
+    );
   }
   if (outcome === 'ok') {
     return { scopeId, position: expectedPosition, valid: true, signature: 'ok', keySource: key.source };

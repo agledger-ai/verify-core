@@ -9,7 +9,9 @@ export type { FailureCode } from './failures.js';
 export {
   buildAgentKeyRegistry,
   buildKeyRegistry,
+  earliestKeyActivation,
   verifyChain,
+  writtenWhileSigning,
 } from './chain.js';
 export type {
   AgentKeyRegistry,

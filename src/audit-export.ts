@@ -22,6 +22,7 @@
 import {
   buildAgentKeyRegistry,
   buildKeyRegistry,
+  earliestKeyActivation,
   verifyChain,
   type CheckApplicability,
   type NormalizedEntry,
@@ -237,7 +238,20 @@ export function verifyAuditExport(
     );
   }
 
-  const keys = buildKeyRegistry(resolveKeys(exportData, options));
+  const resolvedKeys = resolveKeys(exportData, options);
+  const keys = buildKeyRegistry(resolvedKeys);
+  // When the install began signing, for CHAIN_ENTRY_UNSIGNED. The engine reads
+  // it as min(activated_at) over its whole key registry, retired keys included,
+  // and `signingKeyWindows` publishes that whole registry. So the instant is
+  // taken over every key the verifier holds (with each key's window resolved
+  // under the trust hierarchy in resolveKeys) plus every window the export
+  // lists for a key it carries no public key for. With no window anywhere
+  // (an older export, or caller keys without activatedAt and no export
+  // windows), it is null and only the signed-before half of the rule applies.
+  const windowOnly = Object.entries(meta.signingKeyWindows ?? {})
+    .filter(([keyId, window]) => !keys.has(keyId) && window !== null && typeof window === 'object')
+    .map(([, window]) => window);
+  const signingSince = earliestKeyActivation([...resolvedKeys, ...windowOnly]);
   const agentKeys =
     options.agentKeys !== undefined ? buildAgentKeyRegistry(options.agentKeys) : undefined;
   const normalized: NormalizedEntry[] = entries.map((e) => {
@@ -296,6 +310,7 @@ export function verifyAuditExport(
     requireKeyId: options.requireKeyId,
     requireOutOfBandKeys: options.requireOutOfBandKeys,
     agentKeys,
+    signingSince,
   });
 
   return {
