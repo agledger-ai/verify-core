@@ -4,6 +4,22 @@ All notable changes to `@agledger/verify-core` will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.6.0] - 2026-09-28
+
+### Fixed
+
+- **An unsigned entry where the install could not have written one is a break.** An entry with no `signingKeyId` used to pass as a `skipped` signature wherever it sat, so a writer holding no key could append an unsigned entry to a signed chain, or a signed row could have its key id nulled, and the chain still verified. It now fails the new `CHAIN_ENTRY_UNSIGNED` when an earlier entry in the same chain names a key, or when its `createdAt` is at or after the earliest `activatedAt` across the key set, retired keys included. That is the rule the engine applies as `signature_missing`. On the export path the key set is every key the verifier holds plus every window in `exportMetadata.signingKeyWindows`, with a caller-supplied window taking precedence for its key as it already does for the key-window check. Unsigned entries written before the install registered its first key, which is how dev and test installs run, stay a `skipped` signature and reduced coverage, as before. With no activation time anywhere (an older export, or caller keys without `activatedAt` and no export windows), only the signed-before half applies; an entry without `createdAt` is judged by that half alone. Every structural check still runs first, so a tampered unsigned entry reports its own code. Under `requireKeyId` / `requireOutOfBandKeys`, such an entry now reports `CHAIN_ENTRY_UNSIGNED` rather than `CHAIN_KEY_POLICY_VIOLATION`, since it is a finding about the chain whatever the policy; an unsigned entry from before the first key still fails the policy.
+- **An all-zero signature on an entry that names a key fails `CHAIN_SIGNATURE_INVALID`.** Without a key policy it was graded `unsigned` and passed, and under `requireKeyId` / `requireOutOfBandKeys` it failed `CHAIN_KEY_POLICY_VIOLATION`. The engine writes a key id only beside a signature it made with that key and fails this shape as an invalid signature; the verifier now agrees, with or without a policy. `verifyChain` no longer produces the `unsigned` signature state; the member stays in the type.
+
+### Added
+
+- `CHECKPOINT_UNSIGNED` in the failure taxonomy, for a verifier that checks checkpoint envelopes: an unsigned checkpoint written at or after the same instant. The per-record export carries no checkpoint envelopes, so `verifyAuditExport` never reports it.
+- `earliestKeyActivation(keys)` and `writtenWhileSigning(writtenAt, signingSince)`, the instant the install began signing and the test against it, so every verifier applies the same rule. `verifyChain` takes a `signingSince` option; omitted, it is derived from the keys it is given, and `null` switches off only the time half.
+
+### Changed
+
+- The conformance corpus is regenerated from agledger-api `cea0f7d5`, whose generator writes the unsigned pass vector before any signing key is registered. Same vectors and expected codes, and all pass.
+
 ## [1.5.0] - 2026-09-21
 
 ### Fixed
