@@ -174,7 +174,9 @@ export interface VerifyExportOptions {
    * CHAIN_SIGNING_KEY_UNANCHORED, and each anchored key's window is the one
    * its statements sign. Without anchors the result says so in `keyTrust` and
    * `optionalChecks.key_anchoring`, and every key is taken on the word of
-   * whoever embedded or supplied it. Malformed entries throw `TypeError`.
+   * whoever embedded or supplied it. An empty array is the same as omitting
+   * it: no walk runs and `keyTrust.status` is `no_anchor`. Malformed entries
+   * throw `TypeError`.
    */
   trustAnchors?: readonly string[];
   /**
@@ -290,20 +292,9 @@ export function verifyAuditExport(
 
   const resolvedKeys = resolveKeys(exportData, options);
   let keys = buildKeyRegistry(resolvedKeys);
-  // When the install began signing, for CHAIN_ENTRY_UNSIGNED. The engine reads
-  // it as min(activated_at) over its whole key registry, retired keys included,
-  // and `signingKeyWindows` publishes that whole registry. So the instant is
-  // taken over every key the verifier holds (with each key's window resolved
-  // under the trust hierarchy in resolveKeys) plus every window the export
-  // lists for a key it carries no public key for. With no window anywhere
-  // (an older export, or caller keys without activatedAt and no export
-  // windows), it is null and only the signed-before half of the rule applies.
-  const windowOnly = Object.entries(meta.signingKeyWindows ?? {})
-    .filter(([keyId, window]) => !keys.has(keyId) && window !== null && typeof window === 'object')
-    .map(([, window]) => window);
-  const signingSince = earliestKeyActivation([...resolvedKeys, ...windowOnly]);
   const agentKeys =
     options.agentKeys !== undefined ? buildAgentKeyRegistry(options.agentKeys) : undefined;
+  // An empty trustAnchors is the same as none: no walk, keyTrust 'no_anchor'.
   const trust =
     options.trustAnchors !== undefined && options.trustAnchors.length > 0
       ? computeKeyTrust({
@@ -314,6 +305,23 @@ export function verifyAuditExport(
         })
       : null;
   if (trust !== null) keys = applyKeyTrust(keys, trust);
+  // When the install began signing, for CHAIN_ENTRY_UNSIGNED. The engine reads
+  // it as min(activated_at) over its whole key registry, retired keys included,
+  // and `signingKeyWindows` publishes that whole registry. So the instant is
+  // taken over every key the verifier holds (with each key's window resolved
+  // under the trust hierarchy in resolveKeys) plus every window the export
+  // lists for a key it carries no public key for. Those windows are unsigned,
+  // and deleting them would move the instant later or clear it, so when the
+  // walk ran, every activation an anchored key's statements sign is taken as
+  // well: the earliest of all of them stands, and neither source can make the
+  // rule looser than the other. With no time anywhere (an older export, or
+  // caller keys without activatedAt, no export windows and no walk), it is null
+  // and only the signed-before half of the rule applies.
+  const windowOnly = Object.entries(meta.signingKeyWindows ?? {})
+    .filter(([keyId, window]) => !keys.has(keyId) && window !== null && typeof window === 'object')
+    .map(([, window]) => window);
+  const signedActivations = trust === null ? [] : [...trust.byDigest.values()].filter((k) => k.trusted);
+  const signingSince = earliestKeyActivation([...resolvedKeys, ...windowOnly, ...signedActivations]);
   const keyTrust = reportKeyTrust(keys, trust, meta.anchoredFrom ?? null);
   const normalized: NormalizedEntry[] = entries.map((e) => {
     const base: NormalizedEntry = {
