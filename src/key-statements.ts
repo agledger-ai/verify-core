@@ -661,9 +661,18 @@ export function computeKeyTrust(input: ComputeKeyTrustInput): KeyTrust {
     if (order === 'written') return instantMs(c.input.createdAt!);
     return signedInstantOf(c) ?? '￿';
   };
+  // Under the signed order a closure sorts after every admission that signs
+  // the same instant, whatever order the document lists them in. A rotation
+  // signs the successor's activatedAt and the predecessor's retiredAt as one
+  // instant, and the Server writes the succession first. This lets no
+  // statement past a closure that the order did not already let through: the
+  // closure still voids every edge its key signs at any later instant, a
+  // forced one or a distrusted key voids them all, and a document that did
+  // not come from the Server could list the succession first anyway.
+  const closureLast = (c: CheckedKeyStatement): number => (order === 'signed' && c.payload?.typ === 'closure' ? 1 : 0);
   const inWriteOrder: Statement[] = checked
-    .map((c, i) => ({ c, i, k: sortKey(c) }))
-    .sort((a, b) => (a.k < b.k ? -1 : a.k > b.k ? 1 : a.i - b.i))
+    .map((c, i) => ({ c, i, k: sortKey(c), r: closureLast(c) }))
+    .sort((a, b) => (a.k < b.k ? -1 : a.k > b.k ? 1 : a.r - b.r || a.i - b.i))
     .flatMap(({ c, k }, at) => c.verdict === 'invalid' || c.payload === null ? [] : [{
       check: c,
       payload: c.payload,
