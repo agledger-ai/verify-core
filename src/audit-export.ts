@@ -32,6 +32,17 @@ import {
 } from './chain.js';
 import type { FailureCode } from './failures.js';
 import type { AgentPublicKeyJwk } from './primitives.js';
+import {
+  applyKeyTrust,
+  computeKeyTrust,
+  keyStatementsFromExport,
+  reportKeyTrust,
+  type DistrustedKey,
+  type KeyStatementInput,
+  type KeyTrustReport,
+  type PublishedKeyStatement,
+  type TrustKeyInput,
+} from './key-statements.js';
 
 /** One entry of a `/audit-export` document. */
 export interface AuditExportEntryInput {
@@ -85,8 +96,15 @@ export interface RecordAuditExportInput {
     exportFormatVersion?: string;
     canonicalization?: string;
     signingPublicKeys?: Record<string, string>;
-    /** keyId → activation/retirement window (engine ≥ v0.26.x). */
+    /** keyId → activation/retirement window, the values the key statements sign. */
     signingKeyWindows?: Record<string, SigningKeyWindow>;
+    /** keyId → the signed key statements admitting that key (API 2.0). Walked from `trustAnchors`. */
+    signingKeyStatements?: Record<string, PublishedKeyStatement[]>;
+    /**
+     * `sha256:<hex>` of the exporting Server's own key. Reported against the
+     * caller's anchors, never used as one: it is the artifact's word.
+     */
+    anchoredFrom?: string | null;
   };
   entries: AuditExportEntryInput[];
   /**
@@ -104,45 +122,70 @@ export interface RecordAuditExportInput {
 }
 
 /**
- * Structural shape for a single out-of-band key in array form. Matches the SDK's
+ * Structural shape for a single supplied key in array form. Matches the SDK's
  * `VerificationKey` (the `.data[]` from `client.verificationKeys.list()`) plus
  * the SCITT COSE_KeySet (`/.well-known/scitt-keys`) entry shape; extra fields
  * are ignored. `publicKey` must be SPKI DER base64.
  */
-export interface OutOfBandKeyEntry {
+export interface SuppliedKeyEntry {
   keyId: string;
   publicKey: string;
   /** Optional activation timestamp; feeds temporal key-validity when present. */
   activatedAt?: string;
   /** Optional retirement timestamp; `null` means "active, no scheduled retirement". */
   retiredAt?: string | null;
+  /**
+   * The key's signed statements, as `/v1/verification-keys` lists them. Walked
+   * with the export's own when `trustAnchors` is given.
+   */
+  statements?: PublishedKeyStatement[];
 }
 
 export interface VerifyExportOptions {
   /**
-   * Public keys supplied OUT OF BAND from a trusted source (GET
-   * /v1/verification-keys, /.well-known/scitt-keys). These override any key
-   * embedded in the export. For a real independent audit, supply keys here
-   * rather than trusting the export's own `signingPublicKeys`.
+   * Public keys the caller supplies (GET /v1/verification-keys,
+   * /.well-known/scitt-keys, its own records). These override any key
+   * embedded in the export under the same id. A key the Server serves comes
+   * from its database, so supplying keys says where they came from, not that
+   * they are trusted: pin `trustAnchors` for that.
    *
    * Accepts either form:
    *   - `Record<keyId, base64SpkiDer>`: the compact map shape
-   *   - `OutOfBandKeyEntry[]`: the natural shape returned by
+   *   - `SuppliedKeyEntry[]`: the natural shape returned by
    *     `client.verificationKeys.list().data` and SCITT COSE_KeySet listings
    *
-   * Anything else throws `TypeError` at the boundary. Fail-closed: the verifier
-   * never silently falls back to embedded keys when the caller meant to defeat
-   * trust in them.
+   * Anything else throws `TypeError` at the boundary.
    */
-  publicKeys?: Record<string, string> | ReadonlyArray<OutOfBandKeyEntry>;
+  publicKeys?: Record<string, string> | ReadonlyArray<SuppliedKeyEntry>;
   /** Require every entry to reference this keyId (else CHAIN_KEY_POLICY_VIOLATION). */
   requireKeyId?: string;
   /**
-   * High-assurance: refuse keys embedded in the export. An entry whose only key
-   * is export-embedded fails CHAIN_KEY_POLICY_VIOLATION; verifying the engine
-   * against its own embedded key is not an independent audit.
+   * Refuse keys embedded in the export: an entry whose only key is
+   * export-embedded fails CHAIN_KEY_POLICY_VIOLATION.
    */
-  requireOutOfBandKeys?: boolean;
+  requireSuppliedKeys?: boolean;
+  /**
+   * SPKI digests (`sha256:<64 hex>`) of vault keys pinned out of band: the
+   * installer prints one, and the Server's `signing-key-digest.js` derives it
+   * from a key. With at least one, the signed key statements the export
+   * carries (`exportMetadata.signingKeyStatements`, plus any `statements` on
+   * supplied keys) are walked from these anchors, every key is graded
+   * anchored or not, an entry signed by a key the walk does not anchor fails
+   * CHAIN_SIGNING_KEY_UNANCHORED, and each anchored key's window is the one
+   * its statements sign. Without anchors the result says so in `keyTrust` and
+   * `optionalChecks.key_anchoring`, and every key is taken on the word of
+   * whoever embedded or supplied it. Malformed entries throw `TypeError`.
+   */
+  trustAnchors?: readonly string[];
+  /**
+   * Keys distrusted from outside the database, in the Server's
+   * `VAULT_DISTRUSTED_KEYS` form (`sha256:<64 hex>`, optionally
+   * `@<RFC 3339 instant>`): what such a key stored at or after the instant
+   * (with none, from the retirement a trusted key signed for it, and with
+   * neither, ever) counts for nothing in the walk. Give auditors the entries
+   * the operator set. Used only with `trustAnchors`.
+   */
+  distrustedKeys?: ReadonlyArray<string | DistrustedKey>;
   /**
    * Ed25519 public keys of agent ephemeral certs, as JWKs: the `publicKeyJwk`
    * the agent sent to `POST /v1/auth/oidc/cert`, which is also the `cnf.jwk`
@@ -194,11 +237,18 @@ export interface VerifyExportResult {
    */
   optionalChecks: Record<OptionalCheck, CheckApplicability>;
   /**
-   * How many signature checks resolved against out-of-band vs export-embedded
-   * keys. `embedded > 0` means the verdict trusts keys shipped by the engine
-   * that produced the export. Supply out-of-band keys for an independent audit.
+   * How many signature checks resolved against supplied vs export-embedded
+   * keys. Provenance only; whether a key is trusted is `keyTrust`.
    */
-  keyProvenance: { outOfBand: number; embedded: number };
+  keyProvenance: { supplied: number; embedded: number };
+  /**
+   * Whether the keys were anchored, and to what. `status: 'no_anchor'` means
+   * no `trustAnchors` were given: the verdict then rests on keys nobody
+   * pinned, which is not a clean verdict whatever `valid` says. Findings on
+   * the key statements themselves (KEY_STATEMENT_INVALID, KEY_CLOSURE_INVALID,
+   * CHAIN_KEY_WINDOW_DRIFT) are listed here and make `valid` false.
+   */
+  keyTrust: KeyTrustReport;
   /**
    * Per-entry fields the export self-describes as UNSIGNED display projections
    * (from `verificationGuide.unsignedFields`), e.g. `actorDisplayName`.
@@ -239,7 +289,7 @@ export function verifyAuditExport(
   }
 
   const resolvedKeys = resolveKeys(exportData, options);
-  const keys = buildKeyRegistry(resolvedKeys);
+  let keys = buildKeyRegistry(resolvedKeys);
   // When the install began signing, for CHAIN_ENTRY_UNSIGNED. The engine reads
   // it as min(activated_at) over its whole key registry, retired keys included,
   // and `signingKeyWindows` publishes that whole registry. So the instant is
@@ -254,6 +304,17 @@ export function verifyAuditExport(
   const signingSince = earliestKeyActivation([...resolvedKeys, ...windowOnly]);
   const agentKeys =
     options.agentKeys !== undefined ? buildAgentKeyRegistry(options.agentKeys) : undefined;
+  const trust =
+    options.trustAnchors !== undefined && options.trustAnchors.length > 0
+      ? computeKeyTrust({
+          keys: trustKeysOf(exportData, options),
+          statements: trustStatementsOf(exportData, options),
+          trustAnchors: options.trustAnchors,
+          ...(options.distrustedKeys !== undefined ? { distrustedKeys: options.distrustedKeys } : {}),
+        })
+      : null;
+  if (trust !== null) keys = applyKeyTrust(keys, trust);
+  const keyTrust = reportKeyTrust(keys, trust, meta.anchoredFrom ?? null);
   const normalized: NormalizedEntry[] = entries.map((e) => {
     const base: NormalizedEntry = {
       scopeId: meta.recordId,
@@ -308,18 +369,24 @@ export function verifyAuditExport(
 
   const chain = verifyChain(normalized, keys, {
     requireKeyId: options.requireKeyId,
-    requireOutOfBandKeys: options.requireOutOfBandKeys,
+    requireSuppliedKeys: options.requireSuppliedKeys,
     agentKeys,
     signingSince,
   });
+  // A finding on the key statements has no chain position; it is reported
+  // at position 0, the place for findings that precede the walk.
+  const registryFinding = keyTrust.findings[0];
+  const brokenAt = chain.brokenAt
+    ? { position: chain.brokenAt.position, code: chain.brokenAt.code, detail: chain.brokenAt.detail }
+    : registryFinding
+      ? { position: 0, code: registryFinding.code, detail: registryFinding.detail }
+      : undefined;
 
   return {
-    valid: chain.valid,
+    valid: chain.valid && keyTrust.findings.length === 0,
     totalEntries: chain.totalEntries,
     verifiedEntries: chain.verifiedEntries,
-    brokenAt: chain.brokenAt
-      ? { position: chain.brokenAt.position, code: chain.brokenAt.code, detail: chain.brokenAt.detail }
-      : undefined,
+    brokenAt,
     entries: chain.entries.map((r) => ({
       position: r.position,
       valid: r.valid,
@@ -333,7 +400,43 @@ export function verifyAuditExport(
     keyProvenance: chain.keyProvenance,
     unsignedProjectionFields: exportData.verificationGuide?.unsignedFields ?? [],
     agentSignatures: chain.agentSignatures,
+    keyTrust,
   };
+}
+
+/**
+ * The keys the walk reads: the export's own, with the windows it lists as the
+ * columns the drift check holds against the signed values, and the supplied
+ * keys as key material only (the caller's catalogue is not the artifact).
+ */
+function trustKeysOf(exportData: RecordAuditExportInput, options: VerifyExportOptions): TrustKeyInput[] {
+  const meta = exportData.exportMetadata;
+  const out: TrustKeyInput[] = [];
+  for (const [keyId, publicKey] of Object.entries(meta.signingPublicKeys ?? {})) {
+    const window = meta.signingKeyWindows?.[keyId];
+    out.push(
+      window && typeof window === 'object'
+        ? { keyId, publicKey, activatedAt: window.activatedAt, retiredAt: window.retiredAt, status: window.retiredAt === null ? 'active' : 'retired' }
+        : { keyId, publicKey },
+    );
+  }
+  for (const k of normalizeSuppliedKeys(options.publicKeys) ?? []) {
+    out.push({ keyId: k.keyId, publicKey: k.spkiBase64 });
+  }
+  return out;
+}
+
+/** The export's key statements, plus any a supplied key carries (a /v1/verification-keys `data[]`). */
+function trustStatementsOf(exportData: RecordAuditExportInput, options: VerifyExportOptions): KeyStatementInput[] {
+  const out = keyStatementsFromExport(exportData.exportMetadata.signingKeyStatements);
+  if (Array.isArray(options.publicKeys)) {
+    const byKey: Record<string, PublishedKeyStatement[]> = {};
+    for (const k of options.publicKeys as ReadonlyArray<SuppliedKeyEntry>) {
+      if (k !== null && typeof k === 'object' && Array.isArray(k.statements)) byKey[k.keyId] = [...(byKey[k.keyId] ?? []), ...k.statements];
+    }
+    out.push(...keyStatementsFromExport(byKey).map((s) => ({ ...s, id: `supplied:${s.id ?? ''}` })));
+  }
+  return out;
 }
 
 function earlyFailure(recordId: string, totalEntries: number, detail: string): VerifyExportResult {
@@ -351,10 +454,12 @@ function earlyFailure(recordId: string, totalEntries: number, detail: string): V
       actor_attribution: 'skipped_no_input',
       key_temporal: 'skipped_no_input',
       agent_signature: 'skipped_no_input',
+      key_anchoring: 'skipped_no_input',
     },
-    keyProvenance: { outOfBand: 0, embedded: 0 },
+    keyProvenance: { supplied: 0, embedded: 0 },
     unsignedProjectionFields: [],
     agentSignatures: { present: 0, verified: 0 },
+    keyTrust: reportKeyTrust(new Map(), null, null),
   };
 }
 
@@ -369,19 +474,19 @@ function resolveKeys(
       byId.set(keyId, { keyId, spkiBase64, source: 'embedded' });
     }
   }
-  // Out-of-band keys override embedded keys of the same id, but inherit the
-  // previously-seen activation/retirement window if the OOB entry didn't carry
-  // its own.
-  const oob = normalizeOutOfBandKeys(options.publicKeys);
-  if (oob) {
-    for (const entry of oob) {
+  // Supplied keys override embedded keys of the same id, but inherit the
+  // previously-seen activation/retirement window if the supplied entry didn't
+  // carry its own.
+  const supplied = normalizeSuppliedKeys(options.publicKeys);
+  if (supplied) {
+    for (const entry of supplied) {
       const existing = byId.get(entry.keyId);
       const activatedAt = entry.activatedAt ?? existing?.activatedAt;
       const retiredAt = entry.retiredAt !== undefined ? entry.retiredAt : existing?.retiredAt;
       byId.set(entry.keyId, {
         keyId: entry.keyId,
         spkiBase64: entry.spkiBase64,
-        source: 'out-of-band',
+        source: 'supplied',
         ...(activatedAt !== undefined ? { activatedAt } : {}),
         ...(retiredAt !== undefined ? { retiredAt } : {}),
       });
@@ -396,17 +501,16 @@ function resolveKeys(
       const existing = byId.get(keyId);
       if (!existing) continue;
       // Trust hierarchy on the temporal axis: when the caller supplied this
-      // key out-of-band AND brought their own activation/retirement window,
-      // the export's (untrusted) signingKeyWindows MUST NOT overwrite it.
-      // A compromised export could otherwise hide a retirement by setting
-      // retiredAt:null, reopening the fallback on the temporal axis. When the OOB
-      // caller did not carry a window, we still fall through to the export's
-      // window, since most auditors trust the engine's published key-rotation log
-      // even when they bring their own key catalogue.
-      const oobCarriesWindow =
-        existing.source === 'out-of-band' &&
+      // key AND brought their own activation/retirement window, the export's
+      // (untrusted) signingKeyWindows MUST NOT overwrite it. A compromised
+      // export could otherwise hide a retirement by setting retiredAt:null.
+      // When the caller did not carry a window, we fall through to the
+      // export's. With trustAnchors, an anchored key's window is the one its
+      // statements sign, whichever of these it carried.
+      const suppliedCarriesWindow =
+        existing.source === 'supplied' &&
         (existing.activatedAt !== undefined || existing.retiredAt !== undefined);
-      if (oobCarriesWindow) continue;
+      if (suppliedCarriesWindow) continue;
       byId.set(keyId, {
         ...existing,
         activatedAt: window.activatedAt,
@@ -417,7 +521,7 @@ function resolveKeys(
   return [...byId.values()];
 }
 
-interface NormalizedOobEntry {
+interface NormalizedSuppliedEntry {
   keyId: string;
   spkiBase64: string;
   activatedAt?: string;
@@ -427,21 +531,21 @@ interface NormalizedOobEntry {
 /**
  * Normalize `options.publicKeys` into a uniform array of entries, or throw
  * `TypeError` at the boundary if the shape is wrong. Fail-closed by design:
- * an OOB-key argument that silently falls back to embedded keys would lie
- * about the audit-independence claim.
+ * a key argument that silently falls back to embedded keys would lie about
+ * which keys the verdict rests on.
  *
  * Accepts:
  *   - `Record<keyId, base64SpkiDer>`: compact map (string-keyed object whose
  *     values are all strings)
- *   - `OutOfBandKeyEntry[]`: natural SDK shape from `verificationKeys.list()`,
+ *   - `SuppliedKeyEntry[]`: natural SDK shape from `verificationKeys.list()`,
  *     or COSE_KeySet shape from `/.well-known/scitt-keys`
  *
  * Returns `null` when no keys were supplied; otherwise an array of normalized
  * entries ready to merge into the registry.
  */
-function normalizeOutOfBandKeys(
+function normalizeSuppliedKeys(
   publicKeys: VerifyExportOptions['publicKeys'],
-): NormalizedOobEntry[] | null {
+): NormalizedSuppliedEntry[] | null {
   if (publicKeys === undefined || publicKeys === null) return null;
 
   if (Array.isArray(publicKeys)) {
@@ -461,7 +565,7 @@ function normalizeOutOfBandKeys(
             `Expected the SDK VerificationKey shape: publicKey must be SPKI DER base64.`,
         );
       }
-      const out: NormalizedOobEntry = { keyId, spkiBase64: publicKey };
+      const out: NormalizedSuppliedEntry = { keyId, spkiBase64: publicKey };
       const activatedAt = (entry as { activatedAt?: unknown }).activatedAt;
       const retiredAt = (entry as { retiredAt?: unknown }).retiredAt;
       if (typeof activatedAt === 'string') out.activatedAt = activatedAt;
@@ -477,7 +581,7 @@ function normalizeOutOfBandKeys(
     );
   }
 
-  const entries: NormalizedOobEntry[] = [];
+  const entries: NormalizedSuppliedEntry[] = [];
   for (const [keyId, value] of Object.entries(publicKeys)) {
     if (typeof value !== 'string') {
       throw new TypeError(

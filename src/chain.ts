@@ -17,7 +17,8 @@
  *     protected-header chain-claim cross-check, and the Ed25519 signature.
  *   - INPUT-GATED (only when the normalized entry, or the caller, supplies the
  *     inputs): binding-integrity, OIDC-actor cross-check, temporal
- *     key-validity, and the agent-signature re-check. The first three run on
+ *     key-validity, the agent-signature re-check, and key anchoring (a
+ *     registry marked by `applyKeyTrust`). The first three run on
  *     the dump and on any export from an engine that ships the row fields
  *     (>= v0.26.x). The agent-signature check needs the cert's public key,
  *     which neither surface carries, so it runs only when the caller passes
@@ -55,9 +56,27 @@ import {
   type AgentPublicKeyJwk,
 } from './primitives.js';
 import type { FailureCode } from './failures.js';
+import { instantMs } from './instant.js';
 
-/** Where a verification key came from: the trust-anchor provenance. */
-export type KeySource = 'out-of-band' | 'embedded';
+/**
+ * Where a verification key came from. `supplied`: the caller passed it (from
+ * `GET /v1/verification-keys`, `/.well-known/scitt-keys`, its own records).
+ * `embedded`: the artifact under verification shipped it. Neither says the key
+ * is trusted: a key the Server serves comes from its database, which is what
+ * a key-registry attacker writes to. Trust comes from walking the signed key
+ * statements from a pinned anchor (`trustAnchors`, see `computeKeyTrust`),
+ * reported per key as `trust`.
+ */
+export type KeySource = 'supplied' | 'embedded';
+
+/**
+ * What the key-statement walk concluded about a key (see `applyKeyTrust`).
+ * `anchored`: signed statements link it to a pinned anchor. `unanchored`:
+ * nothing signed does, so entries under it fail CHAIN_SIGNING_KEY_UNANCHORED.
+ * `undecided`: the only link runs through a signature this host cannot
+ * compute, so entries under it are CHAIN_UNSUPPORTED_ALGORITHM, not tamper.
+ */
+export type KeyTrustState = 'anchored' | 'unanchored' | 'undecided';
 
 /** A public key the walk can verify signatures against. */
 export interface VerificationKey {
@@ -65,11 +84,10 @@ export interface VerificationKey {
   /** SPKI DER, base64-encoded (the engine's vault_signing_keys.public_key shape). */
   spkiBase64: string;
   /**
-   * `out-of-band` = supplied by the caller from a trusted source (e.g.
-   * /v1/verification-keys, /.well-known/scitt-keys). `embedded` = shipped inside
-   * the artifact being verified (the export/dump the engine produced). Surfaced
-   * in the result so a caller can tell whether it verified the engine against an
-   * independent key or against the engine's own answer key.
+   * `supplied` = passed by the caller. `embedded` = shipped inside the
+   * artifact being verified (the export or dump the engine produced). Surfaced
+   * in the result so a caller can tell whether it verified against a key it
+   * brought or against the artifact's own answer key.
    */
   source: KeySource;
   /**
@@ -81,9 +99,15 @@ export interface VerificationKey {
    * code path; only the key material does.
    */
   algorithm?: string;
-  /** Optional temporal-validity window (present on the dump path only). */
+  /** Optional temporal-validity window. */
   activatedAt?: string;
   retiredAt?: string | null;
+  /**
+   * The key-statement walk's verdict on this key, set by `applyKeyTrust`.
+   * Absent when no walk ran (no `trustAnchors`), and the result then reports
+   * `optionalChecks.key_anchoring: skipped_no_input`.
+   */
+  trust?: KeyTrustState;
 }
 
 export type KeyRegistry = ReadonlyMap<string, VerificationKey>;
@@ -174,7 +198,8 @@ export type OptionalCheck =
   | 'oidc_actor'
   | 'actor_attribution'
   | 'key_temporal'
-  | 'agent_signature';
+  | 'agent_signature'
+  | 'key_anchoring';
 export type CheckApplicability = 'applied' | 'skipped_no_input';
 
 export interface SignatureOutcome {
@@ -223,8 +248,8 @@ export interface ChainResult {
   signatureCoverage: { signed: number; unsigned: number; skipped: number; total: number };
   /** Which input-gated checks actually ran on this chain vs were skipped for absent input. */
   optionalChecks: Record<OptionalCheck, CheckApplicability>;
-  /** How many signature checks resolved against out-of-band vs embedded keys. */
-  keyProvenance: { outOfBand: number; embedded: number };
+  /** How many signature checks resolved against supplied vs embedded keys. */
+  keyProvenance: { supplied: number; embedded: number };
   /**
    * Agent signatures on this chain. `present` counts entries that passed
    * every other check and whose signed payload carries
@@ -241,11 +266,13 @@ export interface VerifyChainOptions {
   /** Require every entry's signingKeyId to equal this id (else CHAIN_KEY_POLICY_VIOLATION). */
   requireKeyId?: string;
   /**
-   * High-assurance auditor mode: refuse to verify against keys shipped inside
-   * the artifact. An entry whose only available key is `embedded` fails
-   * CHAIN_KEY_POLICY_VIOLATION. Forces the caller to supply keys out of band.
+   * Refuse to verify against keys shipped inside the artifact: an entry whose
+   * only available key is `embedded` fails CHAIN_KEY_POLICY_VIOLATION. This
+   * says where a key came from, not that it is trusted; a key the Server
+   * serves comes from its database. Anchor keys with `computeKeyTrust` /
+   * `applyKeyTrust` for that.
    */
-  requireOutOfBandKeys?: boolean;
+  requireSuppliedKeys?: boolean;
   /**
    * Agent cert keys (see `buildAgentKeyRegistry`). When an entry's signed
    * payload carries an engine-validated `on_behalf_of.agent_signature` and its
@@ -339,8 +366,9 @@ export function verifyChain(
     actor_attribution: 'skipped_no_input',
     key_temporal: 'skipped_no_input',
     agent_signature: 'skipped_no_input',
+    key_anchoring: 'skipped_no_input',
   };
-  const keyProvenance = { outOfBand: 0, embedded: 0 };
+  const keyProvenance = { supplied: 0, embedded: 0 };
   const agentSignatures = { present: 0, verified: 0 };
   let verifiedEntries = 0;
   let brokenAt: ChainResult['brokenAt'];
@@ -400,7 +428,7 @@ export function verifyChain(
     switch (result.signature) {
       case 'ok':
         coverage.signed++;
-        if (result.keySource === 'out-of-band') keyProvenance.outOfBand++;
+        if (result.keySource === 'supplied') keyProvenance.supplied++;
         else if (result.keySource === 'embedded') keyProvenance.embedded++;
         break;
       case 'unsigned':
@@ -673,15 +701,15 @@ function verifyEntry(
       );
     }
     // Fail closed under a key policy: a high-assurance run that requires a
-    // specific key (or out-of-band keys) must NOT accept an unsigned/null-key
+    // specific key (or supplied keys) must NOT accept an unsigned/null-key
     // entry as valid; otherwise an attacker forges an entry, nulls its
     // signingKeyId, and slips past the policy the auditor explicitly set.
-    if (options.requireKeyId || options.requireOutOfBandKeys) {
+    if (options.requireKeyId || options.requireSuppliedKeys) {
       return fail(
         scopeId,
         expectedPosition,
         'CHAIN_KEY_POLICY_VIOLATION',
-        'Entry has no signingKeyId but this run requires a signed entry (requireKeyId / requireOutOfBandKeys).',
+        'Entry has no signingKeyId but this run requires a signed entry (requireKeyId / requireSuppliedKeys).',
       );
     }
     return { scopeId, position: expectedPosition, valid: true, signature: 'skipped' };
@@ -706,13 +734,55 @@ function verifyEntry(
     );
   }
 
-  if (options.requireOutOfBandKeys && key.source !== 'out-of-band') {
+  if (options.requireSuppliedKeys && key.source !== 'supplied') {
     return fail(
       scopeId,
       expectedPosition,
       'CHAIN_KEY_POLICY_VIOLATION',
-      `Key ${entry.signingKeyId} is embedded in the artifact; this run requires out-of-band keys.`,
+      `Key ${entry.signingKeyId} is embedded in the artifact; this run requires supplied keys.`,
     );
+  }
+
+  // Signed-kid binding (engine mirror: signing_key_drift), ahead of every
+  // question about the key, as the engine orders it. The row's signingKeyId
+  // column selected the key above, but the column is a denormalized
+  // convenience; the kid at protected-header label 4 is signature-covered. A
+  // divergence means the column was rewritten after signing, e.g. to point
+  // verification at a key the tamperer controls.
+  const signedKid = extractKid(parts.protectedBstr);
+  if (signedKid !== null && signedKid !== entry.signingKeyId) {
+    return fail(
+      scopeId,
+      expectedPosition,
+      'CHAIN_SIGNING_KEY_DRIFT',
+      `Row signingKeyId=${entry.signingKeyId} does not match the signature-covered kid ${signedKid} in the protected header.`,
+    );
+  }
+
+  // Input-gated: key anchoring (engine mirror: signing_key_unanchored). Runs
+  // when a key-statement walk marked the registry. A key nothing signed links
+  // to a pinned anchor is one anything with write access to the Server's
+  // database can register, so an entry under it is a forgery until shown
+  // otherwise, whatever its signature says.
+  if (key.trust !== undefined) {
+    optionalChecks.key_anchoring = 'applied';
+    if (key.trust === 'unanchored') {
+      return fail(
+        scopeId,
+        expectedPosition,
+        'CHAIN_SIGNING_KEY_UNANCHORED',
+        `Key ${entry.signingKeyId} is not linked by any signed key statement to a pinned trust anchor.`,
+      );
+    }
+    if (key.trust === 'undecided') {
+      return fail(
+        scopeId,
+        expectedPosition,
+        'CHAIN_UNSUPPORTED_ALGORITHM',
+        `Key ${entry.signingKeyId} is linked to a pinned anchor only through a key statement signed under an algorithm this host cannot compute, and ${describeUnsupportedAlgorithm(key.spkiBase64)}`,
+        'unsupported',
+      );
+    }
   }
 
   // Registry self-consistency: when the input surface declares an algorithm for
@@ -735,23 +805,10 @@ function verifyEntry(
     }
   }
 
-  // Signed-kid binding (engine mirror: signing_key_drift). The row's
-  // signingKeyId column selected the key above, but the column is a
-  // denormalized convenience; the kid at protected-header label 4 is
-  // signature-covered. A divergence means the column was rewritten after
-  // signing, e.g. to point verification at a key the tamperer controls.
-  const signedKid = extractKid(parts.protectedBstr);
-  if (signedKid !== null && signedKid !== entry.signingKeyId) {
-    return fail(
-      scopeId,
-      expectedPosition,
-      'CHAIN_SIGNING_KEY_DRIFT',
-      `Row signingKeyId=${entry.signingKeyId} does not match the signature-covered kid ${signedKid} in the protected header.`,
-    );
-  }
-
   // Input-gated: temporal key-validity. Only when both the key window and the
-  // entry write time are present (dump path).
+  // entry write time are present. Compared at millisecond precision, the
+  // precision of an entry's write time, truncating a microsecond window edge
+  // the way the engine does.
   if (entry.createdAt && (key.activatedAt || key.retiredAt)) {
     optionalChecks.key_temporal = 'applied';
     const temporal = temporalKeyFailure(entry.createdAt, key);
@@ -862,10 +919,10 @@ function temporalKeyFailure(
   createdAt: string,
   key: VerificationKey,
 ): { code: 'CHAIN_KEY_NOT_YET_ACTIVE' | 'CHAIN_KEY_EXPIRED'; detail: string } | null {
-  const written = Date.parse(createdAt);
+  const written = instantMs(createdAt);
   if (Number.isNaN(written)) return null;
   if (key.activatedAt) {
-    const activated = Date.parse(key.activatedAt);
+    const activated = instantMs(key.activatedAt);
     if (!Number.isNaN(activated) && written < activated) {
       return {
         code: 'CHAIN_KEY_NOT_YET_ACTIVE',
@@ -874,7 +931,7 @@ function temporalKeyFailure(
     }
   }
   if (key.retiredAt) {
-    const retired = Date.parse(key.retiredAt);
+    const retired = instantMs(key.retiredAt);
     if (!Number.isNaN(retired) && written > retired) {
       return {
         code: 'CHAIN_KEY_EXPIRED',

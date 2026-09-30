@@ -35,15 +35,16 @@ for a single record export.
 import { verifyAuditExport } from '@agledger/verify-core';
 
 const result = verifyAuditExport(exportDocument, {
-  publicKeys,             // optional out-of-band keys (see "Out-of-band keys" below)
-  requireOutOfBandKeys: true, // optional: refuse the export's embedded keys
+  // The SPKI digest of a vault key you took out of band (see "Anchoring keys").
+  trustAnchors: ['sha256:15d63684b387235c47fe3a81e3004b928f4ea535236a2c1b47465ce5fdd7ce0e'],
 });
 
 if (!result.valid) {
   console.error(`Broken at position ${result.brokenAt?.position}: ${result.brokenAt?.code}`);
   process.exit(1);
 }
-// { valid: true, verifiedEntries, totalEntries, keyProvenance: { outOfBand, embedded }, ... }
+console.log(result.keyTrust.status); // 'walked'; 'no_anchor' when no trustAnchors were given
+// { valid: true, verifiedEntries, totalEntries, keyTrust, keyProvenance: { supplied, embedded }, ... }
 ```
 
 ## What it verifies
@@ -75,13 +76,108 @@ if (!result.valid) {
   the attribution an export's own guide tells an auditor to rely on, match the
   actor claim signed in the protected header, so an export re-attributed to
   another actor fails `CHAIN_ACTOR_ATTRIBUTION_MISMATCH`.
+- **Key anchoring**, with `trustAnchors`: each entry's key is linked by signed
+  key statements to a key you pinned, or the entry fails
+  `CHAIN_SIGNING_KEY_UNANCHORED` (below).
 - **Key validity windows**: each entry was written inside its signing key's
-  activation window.
+  activation window. With `trustAnchors`, the window is the one the key
+  statements sign.
 - **Agent signatures**, when you supply the agent's cert key (below).
 
 The payload, OIDC, attribution and key-window checks run when the export
 carries their inputs, which every current Server does. The result's `optionalChecks` says
 which ran, so "not checked" never reads as "passed".
+
+## Anchoring keys
+
+A vault key the Server publishes comes from its database, and anything with
+write access to that database can add a key row and entries signed with it.
+What it cannot add is a **key statement**: a COSE_Sign1 signed by a key the
+Server already trusted (and, for a new key, by the new key too). Pass the SPKI
+digest of a vault key you hold or took out of band as `trustAnchors`, and the
+verifier walks the statements from it:
+
+- the installer prints the digest of the first vault key, and the Server's
+  `signing-key-digest.js` derives one from any key you hold;
+- the export's `exportMetadata.anchoredFrom` names the Server's own key, and
+  the result reports whether it is one of your anchors
+  (`keyTrust.anchoredFromPinned`), but it is the export's word and never
+  counts as an anchor itself.
+
+An entry signed by a key the walk does not anchor fails
+`CHAIN_SIGNING_KEY_UNANCHORED`, and each anchored key is held to the window its
+statements sign. Without `trustAnchors`, `keyTrust.status` is `no_anchor`,
+`optionalChecks.key_anchoring` is `skipped_no_input`, and the verdict rests on
+keys nobody pinned: a key written into the database alone would pass.
+
+```ts
+import { verifyAuditExport } from '@agledger/verify-core';
+
+const result = verifyAuditExport(exportDocument, {
+  trustAnchors: ['sha256:15d63684b387235c47fe3a81e3004b928f4ea535236a2c1b47465ce5fdd7ce0e'],
+  // The operator's VAULT_DISTRUSTED_KEYS, when a key leaked: what it signed
+  // from the instant on (or, with none, from its retirement) counts for nothing.
+  distrustedKeys: [],
+});
+
+const { status, anchoredKeyIds, unanchoredKeyIds, findings } = result.keyTrust;
+console.log(status, anchoredKeyIds, unanchoredKeyIds);
+for (const f of findings) console.log(f.code, f.keyId, f.detail);
+```
+
+The statements the export carries (`exportMetadata.signingKeyStatements`) are
+walked, together with any `statements` on keys you supply from
+`GET /v1/verification-keys`. Findings about the statements themselves make the
+result invalid, at position 0:
+
+- `KEY_STATEMENT_INVALID`: a statement that does not verify, disagrees with
+  what it is filed under, touches no anchored key, or was signed by a key after
+  its closure or after the key was already admitted;
+- `KEY_CLOSURE_INVALID`: a retired key with no closure that counts for it, or
+  a closure by a key the walk does not anchor, by a key after its own
+  retirement, or dated before its subject was activated;
+- `CHAIN_KEY_WINDOW_DRIFT`: a listed window or status that differs from the
+  signed value (compared at millisecond precision).
+
+A statement is ordered by its write time where the source carries one (a
+dump's `created_at`). The key documents do not, so a walk over an export or
+`/v1/verification-keys` orders statements by the instant each one signs. For a
+document the Server served the two orders agree. A key retired without
+`force` whose private half later leaks can date a statement before its
+retirement, which only a dump's write order exposes; a forced retirement voids
+every edge out of its key under either order. Walk the dump for that assurance.
+
+### Walking a dump or a key document
+
+`@agledger/verify` walks a full-vault dump with the same functions:
+
+```ts
+import { readFileSync } from 'node:fs';
+import { applyKeyTrust, buildKeyRegistry, computeKeyTrust, keyStatementFromDumpRow, trustKeyFromDumpRow } from '@agledger/verify-core';
+import type { DumpKeyStatementRow, DumpSigningKeyRow } from '@agledger/verify-core';
+
+const rows = <T,>(file: string): T[] =>
+  readFileSync(file, 'utf8').split('\n').filter((l) => l.trim() !== '').map((l) => JSON.parse(l) as T);
+const keys = rows<DumpSigningKeyRow>('vault_signing_keys.ndjson');
+
+const trust = computeKeyTrust({
+  keys: keys.map(trustKeyFromDumpRow),
+  statements: rows<DumpKeyStatementRow>('vault_key_statements.ndjson').map(keyStatementFromDumpRow),
+  trustAnchors: ['sha256:15d63684b387235c47fe3a81e3004b928f4ea535236a2c1b47465ce5fdd7ce0e'],
+});
+// Marks each key anchored, unanchored or undecided and gives anchored keys
+// their signed windows; verifyChain then grades entries against it.
+const registry = applyKeyTrust(
+  buildKeyRegistry(keys.map((k) => ({ keyId: k.key_id, spkiBase64: k.public_key, source: 'embedded' as const }))),
+  trust,
+);
+console.log([...registry.values()].map((k) => `${k.keyId} ${k.trust}`), trust.findings);
+```
+
+`keyStatementsFromVerificationKeys(document)` gives the same inputs from a
+`GET /v1/verification-keys` response. A key reached only through a statement
+this host cannot compute (Ed25519 history on a FIPS host) is `undecided`, and
+entries under it are `CHAIN_UNSUPPORTED_ALGORITHM` rather than unanchored.
 
 ## Agent signatures
 
@@ -162,18 +258,33 @@ console.log(describeUnsupportedAlgorithm(spkiBase64));
 that refuses to *load* a key of some algorithm produces no key object to
 resolve, which is exactly when the question matters most.
 
-## Out-of-band keys
+## Supplied keys
 
 `options.publicKeys` accepts either of two shapes:
 
 - a **`Record<keyId, base64SpkiDer>`** map (compact, keyed by key id), or
-- an **`OutOfBandKeyEntry[]`** array, the natural shape returned by
+- a **`SuppliedKeyEntry[]`** array, the natural shape returned by
   `client.verificationKeys.list().data` and SCITT COSE_KeySet listings, where
-  each entry is `{ keyId, publicKey, activatedAt?, retiredAt? }` (`publicKey`
-  is SPKI DER base64).
+  each entry is `{ keyId, publicKey, activatedAt?, retiredAt?, statements? }`
+  (`publicKey` is SPKI DER base64).
 
 Both are normalized at the boundary; anything else throws `TypeError`
 (fail-closed: the verifier never silently falls back to embedded keys).
+
+## Org-read log
+
+The cross-party read log (`org_admin_reads`) is an RFC 9162 §2.1 Merkle tree,
+the same construction SCITT Receipts use. Its hashes are lowercase hex:
+
+```ts
+import { orgReadLeafHash, orgReadMerkleRoot, verifyOrgReadInclusion } from '@agledger/verify-core';
+
+// leaf_hash = hex(sha256(0x00 || cose_sign1)); a checkpoint's root is the RFC 9162 root over them.
+const leaf = orgReadLeafHash(Buffer.from('cose-sign1-bytes'));
+const root = orgReadMerkleRoot([leaf]);
+// An inclusion proof from GET /v1/audit/org-reads/checkpoints/{id}/proof; a one-leaf tree has an empty path.
+console.log(root === leaf, verifyOrgReadInclusion(leaf, 0, 1, [], root!)); // true true
+```
 
 ## Canonical failure taxonomy
 
@@ -184,9 +295,11 @@ chain was checked by the SDK, the CLI, the MCP tool, or `@agledger/verify`.
 
 ## Key provenance
 
-The result distinguishes keys supplied **out of band** (by the caller) from keys
-**embedded in the export** under inspection. High-assurance audits can require
-out-of-band keys and fail closed on a self-attesting export.
+The result distinguishes keys **supplied** by the caller from keys **embedded in
+the export** under inspection (`keyProvenance`), and `requireSuppliedKeys`
+refuses embedded keys. That says where a key came from, not that it is trusted:
+a key fetched from the Server comes from its database too. Trust is what
+`trustAnchors` establishes.
 
 ## License
 

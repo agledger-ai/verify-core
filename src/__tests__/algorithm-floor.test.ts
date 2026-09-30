@@ -114,8 +114,8 @@ function registry(...keys: VerificationKey[]) {
   return buildKeyRegistry(keys);
 }
 
-const edKey: VerificationKey = { keyId: ED_KEY_ID, spkiBase64: spkiBase64(ed.publicKey), source: 'out-of-band' };
-const esKey: VerificationKey = { keyId: ES_KEY_ID, spkiBase64: spkiBase64(es.publicKey), source: 'out-of-band' };
+const edKey: VerificationKey = { keyId: ED_KEY_ID, spkiBase64: spkiBase64(ed.publicKey), source: 'supplied' };
+const esKey: VerificationKey = { keyId: ES_KEY_ID, spkiBase64: spkiBase64(es.publicKey), source: 'supplied' };
 
 describe('resolveKeyAlgorithm', () => {
   it('classifies Ed25519 and P-256 keys from the SPKI, not any header', () => {
@@ -200,7 +200,7 @@ describe('exit criterion preserved: an algorithm past this build fails closed', 
   const es384Key: VerificationKey = {
     keyId: ES_KEY_ID,
     spkiBase64: spkiBase64(es384.publicKey),
-    source: 'out-of-band',
+    source: 'supplied',
   };
   const envelope = buildEnvelope({
     alg: -35,
@@ -281,9 +281,9 @@ describe('unsigned sentinel is key-length-derived, and fails on an entry that na
     expect(result.signatureCoverage).toMatchObject({ signed: 0, unsigned: 0, skipped: 0 });
   });
 
-  it('an all-zero signature on an entry claiming a key fails the same way under requireOutOfBandKeys', () => {
+  it('an all-zero signature on an entry claiming a key fails the same way under requireSuppliedKeys', () => {
     const result = verifyChain([toEntry(zeroSig, 1, null, ED_KEY_ID)], registry(edKey), {
-      requireOutOfBandKeys: true,
+      requireSuppliedKeys: true,
     });
     expect(result.valid).toBe(false);
     expect(result.brokenAt?.code).toBe('CHAIN_SIGNATURE_INVALID');

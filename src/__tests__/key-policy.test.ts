@@ -7,7 +7,7 @@ import type { RecordAuditExportInput } from '../audit-export.js';
 
 /**
  * Regression guard for the null-key fail-closed fix: a high-assurance run
- * (requireKeyId / requireOutOfBandKeys) must NOT accept an entry whose
+ * (requireKeyId / requireSuppliedKeys) must NOT accept an entry whose
  * signingKeyId is null as valid. Without a key policy, a null-key entry
  * written before the install began signing is a legitimate hash-chain-only
  * ('skipped') row. Built on the corpus's own unsigned export, whose entries
@@ -50,10 +50,10 @@ describe('null-key entry under a key policy fails closed', () => {
     expect(result.brokenAt?.position).toBe(1);
   });
 
-  it('fails CHAIN_KEY_POLICY_VIOLATION under requireOutOfBandKeys', () => {
+  it('fails CHAIN_KEY_POLICY_VIOLATION under requireSuppliedKeys', () => {
     const result = verifyAuditExport(load('unsigned.json'), {
       publicKeys: loadOobKeys(),
-      requireOutOfBandKeys: true,
+      requireSuppliedKeys: true,
     });
     expect(result.valid).toBe(false);
     expect(result.brokenAt?.code).toBe('CHAIN_KEY_POLICY_VIOLATION');

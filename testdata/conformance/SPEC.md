@@ -74,7 +74,7 @@ a `fail` vector passes/returns the wrong code — that is the whole point.
 
 ## Canonical FailureCode taxonomy
 
-Defined in `packages/verify-core/src/failures.ts`. SCREAMING_SNAKE, namespaced:
+Defined in `src/failures.ts`. SCREAMING_SNAKE, namespaced:
 
 - input/format: `UNSUPPORTED_FORMAT`, `CHAIN_EMPTY`
 - per-record chain: `CHAIN_POSITION_GAP`, `CHAIN_GENESIS_INVALID`,
@@ -82,35 +82,47 @@ Defined in `packages/verify-core/src/failures.ts`. SCREAMING_SNAKE, namespaced:
   `CHAIN_COSE_DECODE_FAILED`, `CHAIN_COSE_HEADER_MISMATCH`,
   `CHAIN_PAYLOAD_BINDING_MISMATCH`, `CHAIN_OIDC_ACTOR_MISMATCH`,
   `CHAIN_SIGNATURE_INVALID`, `CHAIN_SIGNATURE_MISSING_KEY`,
-  `CHAIN_KEY_POLICY_VIOLATION`, `CHAIN_KEY_EXPIRED`, `CHAIN_KEY_NOT_YET_ACTIVE`
+  `CHAIN_KEY_POLICY_VIOLATION`, `CHAIN_KEY_EXPIRED`, `CHAIN_KEY_NOT_YET_ACTIVE`,
+  `CHAIN_ENTRY_UNSIGNED`, `CHAIN_SIGNING_KEY_UNANCHORED`
 - checkpoints: `CHECKPOINT_ROW_MISSING`, `CHECKPOINT_HASH_MISMATCH`,
-  `CHECKPOINT_SIGNATURE_INVALID`
+  `CHECKPOINT_SIGNATURE_INVALID`, `CHECKPOINT_UNSIGNED`, `CHECKPOINT_KEY_UNANCHORED`
 - org_admin_reads: `TENANT_READ_LEAF_HASH_MISMATCH`,
   `TENANT_READ_LEAF_INDEX_GAP`, `TENANT_READ_SIGNATURE_INVALID`,
   `TENANT_CHECKPOINT_LEAF_COUNT_MISMATCH`, `TENANT_CHECKPOINT_ROOT_MISMATCH`,
-  `TENANT_CHECKPOINT_SIGNATURE_INVALID`, `TENANT_CHECKPOINT_FORK`
+  `TENANT_CHECKPOINT_SIGNATURE_INVALID`, `TENANT_CHECKPOINT_FORK`,
+  `TENANT_READ_LEAF_UNSIGNED`, `TENANT_READ_KEY_UNANCHORED`,
+  `TENANT_CHECKPOINT_UNSIGNED`, `TENANT_CHECKPOINT_KEY_UNANCHORED`
+- key registry: `KEY_STATEMENT_INVALID`, `KEY_CLOSURE_INVALID`, `CHAIN_KEY_WINDOW_DRIFT`
 
 ## verify-core public API (consumed by every TS surface)
 
 ```ts
-import { verifyAuditExport, verifyChain, buildKeyRegistry,
+import { verifyAuditExport, verifyChain, buildKeyRegistry, computeKeyTrust, applyKeyTrust,
          type VerificationKey, type NormalizedEntry, type FailureCode } from '@agledger/verify-core';
 
 // export path:
-const r = verifyAuditExport(exportJson, { publicKeys?, requireKeyId?, requireOutOfBandKeys? });
+const r = verifyAuditExport(exportJson, { publicKeys?, requireKeyId?, requireSuppliedKeys?,
+                                          trustAnchors?, distrustedKeys?, agentKeys? });
 // r: { valid, totalEntries, verifiedEntries, brokenAt?{position,code,detail}, entries[], recordId,
-//      signatureCoverage{signed,unsigned,skipped,total}, optionalChecks{payload_binding,oidc_actor,key_temporal},
-//      keyProvenance{outOfBand,embedded} }
+//      signatureCoverage{signed,unsigned,skipped,total},
+//      optionalChecks{payload_binding,oidc_actor,actor_attribution,key_temporal,agent_signature,key_anchoring},
+//      keyProvenance{supplied,embedded}, keyTrust{status,anchors,findings,...} }
 
 // dump path builds NormalizedEntry[] WITH binding/oidcActor/createdAt + keys with
-// activatedAt/retiredAt windows, then calls verifyChain(entries, keyRegistry, opts) per chain.
+// activatedAt/retiredAt windows, walks vault_key_statements.ndjson with
+// computeKeyTrust + applyKeyTrust when anchors are given, then calls
+// verifyChain(entries, keyRegistry, opts) per chain.
 ```
+
+The manifest's `options.requireOutOfBandKeys` is the engine's name for
+`requireSuppliedKeys`; `options.trustAnchors` maps to `trustAnchors`.
 
 `NormalizedEntry` optional fields drive the input-gated checks:
 `binding{recordId,entryType,payload}` -> CHAIN_PAYLOAD_BINDING_MISMATCH;
 `oidcActor{iss,sub,synthesized}` -> CHAIN_OIDC_ACTOR_MISMATCH;
 `createdAt` + key `activatedAt/retiredAt` -> CHAIN_KEY_EXPIRED or
 CHAIN_KEY_NOT_YET_ACTIVE (entry written before the key's own activation).
+A key `trust` set by `applyKeyTrust` -> CHAIN_SIGNING_KEY_UNANCHORED.
 Absent inputs => the check reports `skipped_no_input` (never a silent pass).
 
 ## Required vectors (minimum)

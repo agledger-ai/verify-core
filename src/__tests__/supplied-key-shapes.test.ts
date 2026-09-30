@@ -11,7 +11,7 @@ import type { RecordAuditExportInput } from '../audit-export.js';
  * shape (the .data list from `client.verificationKeys.list()`). A wrong
  * shape must throw `TypeError` at the boundary, never silently fall
  * through to the export's embedded keys, which would lie about the
- * audit-independence claim (`keyProvenance.outOfBand === 0` with `valid: true`).
+ * provenance claim (`keyProvenance.supplied === 0` with `valid: true`).
  */
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -32,17 +32,17 @@ function oobAsSdkArray(): Array<{ keyId: string; publicKey: string; activatedAt?
 }
 
 describe('verifyAuditExport publicKeys polymorphism', () => {
-  it('accepts Record<keyId, b64SPKI> form and routes signatures to OOB keys', () => {
+  it('accepts Record<keyId, b64SPKI> form and routes signatures to supplied keys', () => {
     const result = verifyAuditExport(loadValid(), { publicKeys: loadOobKeys() });
     expect(result.valid).toBe(true);
-    expect(result.keyProvenance.outOfBand).toBeGreaterThan(0);
+    expect(result.keyProvenance.supplied).toBeGreaterThan(0);
     expect(result.keyProvenance.embedded).toBe(0);
   });
 
-  it('accepts the natural SDK VerificationKey[] shape and routes signatures to OOB keys', () => {
+  it('accepts the natural SDK VerificationKey[] shape and routes signatures to supplied keys', () => {
     const result = verifyAuditExport(loadValid(), { publicKeys: oobAsSdkArray() });
     expect(result.valid).toBe(true);
-    expect(result.keyProvenance.outOfBand).toBeGreaterThan(0);
+    expect(result.keyProvenance.supplied).toBeGreaterThan(0);
     expect(result.keyProvenance.embedded).toBe(0);
   });
 

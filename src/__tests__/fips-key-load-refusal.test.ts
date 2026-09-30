@@ -126,7 +126,7 @@ const esEnvelope = buildEnvelope({
 const edKey: VerificationKey = {
   keyId: ED_KEY_ID,
   spkiBase64: spkiBase64(ed.publicKey),
-  source: 'out-of-band',
+  source: 'supplied',
 };
 
 function toEntry(envelope: Uint8Array, signingKeyId: string): NormalizedEntry {

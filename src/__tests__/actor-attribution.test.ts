@@ -16,7 +16,7 @@ import { decodeCoseSign1, extractActorClaim } from '../primitives.js';
  * UUID. Those two, plus `actorRole`, ride in the COSE protected header at
  * CWT_Claims label 15 -> private label -65539. Before this check an export
  * could be re-attributed to another actor by editing the column and still
- * verify with out-of-band keys and requireOutOfBandKeys, which made the
+ * verify with supplied keys and requireSuppliedKeys, which made the
  * guide's own advice unverifiable.
  *
  * Both fixtures are real engine output: the conformance corpus (admin actor)
@@ -62,13 +62,13 @@ describe('actor-attribution cross-check', () => {
   it('flips actor_attribution to applied on a clean export and still passes', () => {
     const result = verifyAuditExport(loadCorpus(), {
       publicKeys: loadOobKeys(),
-      requireOutOfBandKeys: true,
+      requireSuppliedKeys: true,
     });
     expect(result.valid).toBe(true);
     expect(result.optionalChecks.actor_attribution).toBe('applied');
   });
 
-  it('refuses an export re-attributed to another owner, under out-of-band keys', () => {
+  it('refuses an export re-attributed to another owner, under supplied keys', () => {
     const doc = clone(loadCorpus());
     const original = doc.entries[0]!.actorOwnerId;
     doc.entries[0]!.actorOwnerId = '00000000-0000-7000-8000-000000000000';
@@ -76,7 +76,7 @@ describe('actor-attribution cross-check', () => {
 
     const result = verifyAuditExport(doc, {
       publicKeys: loadOobKeys(),
-      requireOutOfBandKeys: true,
+      requireSuppliedKeys: true,
     });
     expect(result.valid).toBe(false);
     expect(result.brokenAt?.code).toBe('CHAIN_ACTOR_ATTRIBUTION_MISMATCH');
@@ -116,7 +116,7 @@ describe('actor-attribution cross-check', () => {
     }
     const result = verifyAuditExport(doc, {
       publicKeys: loadOobKeys(),
-      requireOutOfBandKeys: true,
+      requireSuppliedKeys: true,
     });
     expect(result.valid).toBe(true);
     expect(result.optionalChecks.actor_attribution).toBe('skipped_no_input');
