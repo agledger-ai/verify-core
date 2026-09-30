@@ -1137,7 +1137,9 @@ export function rfc9162NodeHash(left: Uint8Array, right: Uint8Array): Uint8Array
 
 /**
  * Verify a RFC 9162 §2.1.3.2 inclusion proof. Mirrors the engine-side
- * implementation; reproduced here so the verifier stays engine-free.
+ * implementation; reproduced here so the verifier stays engine-free. False
+ * when `leafIndex` or `treeSize` is not a safe integer: the walk halves them,
+ * and a fraction, NaN or an unsafe integer would walk some other tree.
  */
 export function verifyRfc9162Inclusion(
   leafHashBytes: Uint8Array,
@@ -1146,8 +1148,11 @@ export function verifyRfc9162Inclusion(
   path: readonly Uint8Array[],
   expectedRoot: Uint8Array,
 ): boolean {
+  if (!Number.isSafeInteger(leafIndex) || !Number.isSafeInteger(treeSize)) return false;
   if (leafIndex < 0 || leafIndex >= treeSize) return false;
   if (treeSize === 1) return path.length === 0 && bytesEqual(leafHashBytes, expectedRoot);
+  // Arithmetic halving rather than `>>>`, which would wrap a size past 2^32.
+  const half = (n: number) => Math.floor(n / 2);
   let fn = leafIndex;
   let sn = treeSize - 1;
   let r = leafHashBytes;
@@ -1155,17 +1160,17 @@ export function verifyRfc9162Inclusion(
   for (; i < path.length; i += 1) {
     if (sn === 0) return false;
     const p = path[i]!;
-    if ((fn & 1) === 1 || fn === sn) {
+    if (fn % 2 === 1 || fn === sn) {
       r = rfc9162NodeHash(p, r);
-      while ((fn & 1) === 0 && fn !== 0) {
-        fn >>>= 1;
-        sn >>>= 1;
+      while (fn % 2 === 0 && fn !== 0) {
+        fn = half(fn);
+        sn = half(sn);
       }
     } else {
       r = rfc9162NodeHash(r, p);
     }
-    fn >>>= 1;
-    sn >>>= 1;
+    fn = half(fn);
+    sn = half(sn);
     if (sn === 0) {
       i += 1;
       break;
@@ -1336,7 +1341,8 @@ export function orgReadMerkleRoot(leafHashesHex: readonly string[]): string | nu
  * Verify an org_admin_reads inclusion proof (`GET
  * /v1/audit/org-reads/checkpoints/{id}/proof`): the RFC 9162 §2.1.3.2 audit
  * path walk over hex values. A one-leaf tree has an empty path. False on any
- * value that is not 64 lowercase hex characters.
+ * value that is not 64 lowercase hex characters, and on a `leafIndex` or
+ * `treeSize` that is not a safe integer (a JSON number can be 0.5 or 1e300).
  */
 export function verifyOrgReadInclusion(
   leafHashHex: string,
