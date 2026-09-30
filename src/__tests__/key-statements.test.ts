@@ -803,3 +803,30 @@ describe('the trust walk on random registries', () => {
     expect(failures).toEqual([]);
   }, 120_000);
 });
+
+describe('distrusted keys over a key document (no write order)', () => {
+  it('a leaked key cannot date a statement before its cutoff: every edge out of it is void', () => {
+    const d = makeKey();
+    const x = makeKey();
+    const g = statement('genesis', d, { signers: [d], activatedAt: T0, createdAt: T0 });
+    const backdated = statement('succession', x, { endorser: d, signers: [d, x], activatedAt: T1, createdAt: T3 });
+    const cutoff = [{ spkiSha256: d.digest, cutoff: T2 }];
+    expect(walk([], [g, backdated], [d.digest], cutoff).trusted.has(x.digest)).toBe(false);
+    expect(walk([], asDocument([g, backdated]), [d.digest], cutoff).trusted.has(x.digest)).toBe(false);
+  });
+
+  it('a routinely closed key, distrusted from its closure, cannot admit a key by signing an earlier instant', () => {
+    const c = makeKey();
+    const n = makeKey();
+    const x = makeKey();
+    const statements = [
+      statement('genesis', c, { signers: [c], activatedAt: T0, createdAt: T0 }),
+      statement('succession', n, { endorser: c, signers: [c, n], activatedAt: T1, createdAt: T1 }),
+      statement('closure', c, { endorser: n, signers: [n], retiredAt: T2, createdAt: T2 }),
+      statement('succession', x, { endorser: c, signers: [c, x], activatedAt: '2026-09-02T12:00:00.000000Z', createdAt: T3 }),
+    ];
+    const distrust = [{ spkiSha256: c.digest, cutoff: null }];
+    expect(walk([], statements, [n.digest], distrust).trusted.has(x.digest)).toBe(false);
+    expect(walk([], asDocument(statements), [n.digest], distrust).trusted.has(x.digest)).toBe(false);
+  });
+});
