@@ -76,6 +76,37 @@ describe('org-read Merkle primitives (RFC 9162 §2.1, hex)', () => {
     expect(verifyOrgReadInclusion(leaves[42]!, 100, 100, proof, root)).toBe(false);
   });
 
+  it('refuses a leafIndex or treeSize that is not a safe integer', () => {
+    const leaves = [orgReadLeafHash(leafData(0)), orgReadLeafHash(leafData(1))];
+    const root = mth(leaves);
+    const proof = path(0, leaves);
+    expect(verifyOrgReadInclusion(leaves[0]!, 0, 2, proof, root)).toBe(true);
+    for (const [index, size] of [[NaN, 2], [0.5, 2], [0, NaN], [0, 2.5], [0, Infinity], [-0.5, 2], [0, 2 ** 53]] as const) {
+      expect(verifyOrgReadInclusion(leaves[0]!, index, size, proof, root), `leafIndex ${index}, treeSize ${size}`).toBe(false);
+    }
+  });
+
+  it('walks a tree past 2^32 leaves without wrapping the index or the size', () => {
+    // RFC 9162 §2.1.3.1 PATH(m, D[n]) needs only the sibling subtree hashes,
+    // so any values stand in for them; the root is folded from the definition.
+    const splitBelow = (n: number): number => { let k = 1; while (k * 2 < n) k *= 2; return k; };
+    const depth = (m: number, n: number): number => (n === 1 ? 0 : 1 + (m < splitBelow(n) ? depth(m, splitBelow(n)) : depth(m - splitBelow(n), n - splitBelow(n))));
+    const rootOf = (leaf: string, m: number, n: number, siblings: readonly string[]): string => {
+      if (n === 1) return leaf;
+      const k = splitBelow(n);
+      const last = siblings[siblings.length - 1]!;
+      const rest = siblings.slice(0, -1);
+      return m < k ? NODE(rootOf(leaf, m, k, rest), last) : NODE(last, rootOf(leaf, m - k, n - k, rest));
+    };
+    const leaf = orgReadLeafHash(leafData(8));
+    for (const [m, n] of [[2 ** 32, 2 ** 32 + 1], [5, 2 ** 32 + 7], [2 ** 32 + 3, 2 ** 32 + 7], [2 ** 40 + 1, 2 ** 41 - 3]] as const) {
+      const siblings = Array.from({ length: depth(m, n) }, (_, i) => orgReadLeafHash(leafData(100 + i)));
+      const root = rootOf(leaf, m, n, siblings);
+      expect(verifyOrgReadInclusion(leaf, m, n, siblings, root), `leaf ${m} of ${n}`).toBe(true);
+      expect(verifyOrgReadInclusion(leaf, m + 1, n, siblings, root), `leaf ${m + 1} of ${n}`).toBe(false);
+    }
+  });
+
   it('hashing the hex text instead of the bytes it denotes does not reproduce the root', () => {
     const leaves = Array.from({ length: 5 }, (_, i) => orgReadLeafHash(leafData(i)));
     const overText = createHash('sha256')
