@@ -9,6 +9,7 @@
  *   CHAIN_*      per-record (and per-org schema-event) hash-chain entry checks
  *   CHECKPOINT_* vault checkpoint cross-check against the live chain
  *   TENANT_*     org_admin_reads Merkle log + signed tree heads
+ *   KEY_*        the vault key statements themselves (the key registry)
  *   <bare>       input/format-level failures that precede any chain walk
  *
  * Every code carries an actionable next step (`suggestion`) so a result is a
@@ -46,6 +47,22 @@
  *                                entries stay reduced coverage.
  *   - CHECKPOINT_UNSIGNED      engine mirror of `checkpoint_unsigned`: the same
  *                                instant, applied to an unsigned checkpoint.
+ *   - TENANT_READ_LEAF_UNSIGNED and TENANT_CHECKPOINT_UNSIGNED  the same two
+ *                                rules on the org_admin_reads log (engine
+ *                                `leaf_signature_missing`, `checkpoint_unsigned`).
+ *   - CHAIN_SIGNING_KEY_UNANCHORED  engine mirror of `signing_key_unanchored`:
+ *                                the entry's key is not linked by signed key
+ *                                statements to a pinned trust anchor. With
+ *                                CHECKPOINT_KEY_UNANCHORED,
+ *                                TENANT_READ_KEY_UNANCHORED and
+ *                                TENANT_CHECKPOINT_KEY_UNANCHORED for the
+ *                                engine's `checkpoint_key_unanchored` and
+ *                                `leaf_key_unanchored`.
+ *   - KEY_STATEMENT_INVALID, KEY_CLOSURE_INVALID, CHAIN_KEY_WINDOW_DRIFT
+ *                                engine mirrors of the key registry findings
+ *                                `key_statement_invalid`, `key_closure_invalid`
+ *                                and `key_window_drift`. They are about the
+ *                                registry, not about any one entry.
  *
  * Server-side cert re-checks are not mirrored here. The engine's chain
  * verification also reports `cert_missing`, `cert_actor_drift`,
@@ -84,19 +101,29 @@ export type FailureCode =
   | 'CHAIN_ACTOR_ATTRIBUTION_MISMATCH'
   | 'CHAIN_AGENT_SIGNATURE_INVALID'
   | 'CHAIN_ENTRY_UNSIGNED'
+  | 'CHAIN_SIGNING_KEY_UNANCHORED'
+  | 'CHAIN_KEY_WINDOW_DRIFT'
   // --- vault checkpoints ---
   | 'CHECKPOINT_ROW_MISSING'
   | 'CHECKPOINT_HASH_MISMATCH'
   | 'CHECKPOINT_SIGNATURE_INVALID'
   | 'CHECKPOINT_UNSIGNED'
+  | 'CHECKPOINT_KEY_UNANCHORED'
   // --- org_admin_reads Merkle log + STH ---
   | 'TENANT_READ_LEAF_HASH_MISMATCH'
   | 'TENANT_READ_LEAF_INDEX_GAP'
   | 'TENANT_READ_SIGNATURE_INVALID'
+  | 'TENANT_READ_LEAF_UNSIGNED'
+  | 'TENANT_READ_KEY_UNANCHORED'
   | 'TENANT_CHECKPOINT_LEAF_COUNT_MISMATCH'
   | 'TENANT_CHECKPOINT_ROOT_MISMATCH'
   | 'TENANT_CHECKPOINT_SIGNATURE_INVALID'
-  | 'TENANT_CHECKPOINT_FORK';
+  | 'TENANT_CHECKPOINT_UNSIGNED'
+  | 'TENANT_CHECKPOINT_KEY_UNANCHORED'
+  | 'TENANT_CHECKPOINT_FORK'
+  // --- vault key statements ---
+  | 'KEY_STATEMENT_INVALID'
+  | 'KEY_CLOSURE_INVALID';
 
 /**
  * Actionable next step per failure code. Kept terse and operational: what the
@@ -130,7 +157,7 @@ const SUGGESTIONS: Record<FailureCode, string> = {
   CHAIN_SIGNATURE_MISSING_KEY:
     'No public key was available for the entry\'s signingKeyId. Supply the key out of band (GET /v1/verification-keys or /.well-known/scitt-keys) and re-run.',
   CHAIN_KEY_POLICY_VIOLATION:
-    'The entry\'s signing key violates the caller\'s trust policy (requireKeyId, or out-of-band keys required). Re-run with the expected key id, or with keys obtained out of band rather than the engine-embedded set.',
+    'The entry\'s signing key violates the caller\'s key policy (requireKeyId, or requireSuppliedKeys refusing a key the artifact embeds). Re-run with the expected key id, or supply the keys yourself. Where a key came from does not make it trusted: pin a trust anchor (trustAnchors) for that.',
   CHAIN_KEY_EXPIRED:
     'The entry was written AFTER its signing key was retired. Possible use of a compromised retired key: check the key rotation and retention record for that key id.',
   CHAIN_KEY_NOT_YET_ACTIVE:
@@ -147,6 +174,10 @@ const SUGGESTIONS: Record<FailureCode, string> = {
     'The agent signature sealed in predicate.on_behalf_of.agent_signature does not verify under the supplied key whose RFC 7638 thumbprint the entry itself names, or is sealed in a shape nothing can verify. The engine checks this signature at intake and the envelope signature says the engine wrote it, so this is not a caller mistake: treat the agent attribution of this entry as unproven and escalate to the operator.',
   CHAIN_ENTRY_UNSIGNED:
     'The entry carries no signing key id where the install could not have written an unsigned entry: after a signed entry in the same chain, or at or after the earliest activation time in the signing key set (retired keys included). From that instant every writer holds a registered key, so this is what a writer without one leaves on the chain, or a signed row whose key id was nulled. Treat the entry as forged and escalate to the operator. Unsigned entries from before the first key activation stay reduced signature coverage, not a break.',
+  CHAIN_SIGNING_KEY_UNANCHORED:
+    'The entry is signed by a key that no signed key statement links to a trust anchor you pinned. Anything with write access to the Server\'s database can register a key and sign entries with it; what it cannot write is a statement signed by a key you trust. Treat the entry as forged. If the key is one you vouch for, pin it (trustAnchors) from a source outside the Server, never from the document that served it.',
+  CHAIN_KEY_WINDOW_DRIFT:
+    'A key registry column (activatedAt, retiredAt or status in a dump row or key document) differs from the value its signed key statements carry. The signed value is the one entries are graded against; the column was rewritten, or the retirement was written without its closure statement. Treat the registry as tampered and compare it with the Server\'s own scan (key_window_drift).',
   CHECKPOINT_ROW_MISSING:
     'A signed checkpoint anchors a position that has no matching chain row. The chain was truncated below a checkpoint (out-of-band DELETE/TRUNCATE). The checkpoint is proof of the missing rows.',
   CHECKPOINT_HASH_MISMATCH:
@@ -155,20 +186,34 @@ const SUGGESTIONS: Record<FailureCode, string> = {
     'A checkpoint\'s COSE_Sign1 signature did not verify. The checkpoint was forged or altered. Re-run with out-of-band verification keys.',
   CHECKPOINT_UNSIGNED:
     'A checkpoint carries no signing key id but was written at or after the earliest activation time in the signing key set (retired keys included), when every writer holds a registered key. The checkpoint was forged or its key id nulled, and nothing it anchors can be trusted. Escalate to the operator.',
+  CHECKPOINT_KEY_UNANCHORED:
+    'A vault checkpoint is signed by a key that no signed key statement links to a trust anchor you pinned. Nothing it anchors can be trusted; treat it as forged (see CHAIN_SIGNING_KEY_UNANCHORED).',
   TENANT_READ_LEAF_HASH_MISMATCH:
     'An org_admin_reads leaf_hash does not match the RFC 9162 leaf hash of its envelope, sha256(0x00 || cose_sign1). The read-log leaf was altered after recording.',
   TENANT_READ_LEAF_INDEX_GAP:
     'org_admin_reads leaf indices are not gap-free for this org. A read-log entry was removed. Obtain the complete log.',
   TENANT_READ_SIGNATURE_INVALID:
     'An org_admin_reads leaf\'s COSE_Sign1 signature did not verify. The read-log leaf was forged or altered.',
+  TENANT_READ_LEAF_UNSIGNED:
+    'An org_admin_reads leaf carries the unsigned kid where the install could not have written one: after a signed leaf in the same org log, or at or after the earliest activation time in the signing key set. Treat the leaf as forged and escalate to the operator.',
+  TENANT_READ_KEY_UNANCHORED:
+    'An org_admin_reads leaf is signed by a key that no signed key statement links to a trust anchor you pinned. Treat the leaf as forged (see CHAIN_SIGNING_KEY_UNANCHORED).',
   TENANT_CHECKPOINT_LEAF_COUNT_MISMATCH:
     'A signed tree head commits to more leaves than the dump contains. The read log was truncated below a checkpoint.',
   TENANT_CHECKPOINT_ROOT_MISMATCH:
     'The RFC 9162 Merkle root recomputed over the leaves does not match the signed root_hash. The read log diverged from what was checkpointed.',
   TENANT_CHECKPOINT_SIGNATURE_INVALID:
     'A signed-tree-head COSE_Sign1 signature did not verify. The STH was forged or altered.',
+  TENANT_CHECKPOINT_UNSIGNED:
+    'An org_admin_reads signed tree head carries no signing key id but was written at or after the earliest activation time in the signing key set. The tree head was forged or its key id nulled; escalate to the operator.',
+  TENANT_CHECKPOINT_KEY_UNANCHORED:
+    'An org_admin_reads signed tree head is signed by a key that no signed key statement links to a trust anchor you pinned. Treat it as forged (see CHAIN_SIGNING_KEY_UNANCHORED).',
   TENANT_CHECKPOINT_FORK:
     'Two signed tree heads at the same tree_size carry different roots. This is an engine fork or signing-key compromise. Escalate immediately.',
+  KEY_STATEMENT_INVALID:
+    'A key statement does not verify, disagrees with the columns it was stored under, touches no anchored key, or was signed by a key after its closure or after the key was already admitted. It admits nothing. One that does not verify, or that a key signed after its closure, is what a writer with database access or a leaked retired key produces: have the operator retire that key with force and add it to VAULT_DISTRUSTED_KEYS, and pass the same entry as distrustedKeys.',
+  KEY_CLOSURE_INVALID:
+    'A key is retired with no closure that counts for it, or a closure is signed by a key the walk does not anchor, by a key after its own retirement, or dates a retirement before its subject was activated. A closure that still counts ends its subject\'s window whoever wrote it; if its signer leaked, have the operator add it to VAULT_DISTRUSTED_KEYS and pass the same entry as distrustedKeys.',
 };
 
 /** The actionable next step for a failure code. */

@@ -185,7 +185,7 @@ const vaultKeys = buildKeyRegistry([
   {
     keyId: KEY_ID,
     spkiBase64: (vault.publicKey.export({ type: 'spki', format: 'der' }) as Buffer).toString('base64'),
-    source: 'out-of-band',
+    source: 'supplied',
   },
 ]);
 const agentKeys = buildAgentKeyRegistry([agentJwk]);

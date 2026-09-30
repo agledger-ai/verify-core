@@ -16,6 +16,7 @@ export {
 export type {
   AgentKeyRegistry,
   KeySource,
+  KeyTrustState,
   VerificationKey,
   KeyRegistry,
   NormalizedEntry,
@@ -33,10 +34,42 @@ export type {
   RecordAuditExportInput,
   SigningKeyWindow,
   VerifyExportOptions,
-  OutOfBandKeyEntry,
+  SuppliedKeyEntry,
   EntryVerificationResult,
   VerifyExportResult,
 } from './audit-export.js';
+
+export {
+  KEY_STATEMENT_CTY,
+  KEY_STATEMENT_KINDS,
+  applyKeyTrust,
+  computeKeyTrust,
+  keyStatementFromDumpRow,
+  keyStatementsFromExport,
+  keyStatementsFromVerificationKeys,
+  parseDistrustedKeys,
+  parseTrustAnchors,
+  reportKeyTrust,
+  spkiSha256,
+  trustKeyFromDumpRow,
+} from './key-statements.js';
+export type {
+  ComputeKeyTrustInput,
+  DistrustedKey,
+  DumpKeyStatementRow,
+  DumpSigningKeyRow,
+  KeyRegistryFinding,
+  KeyRegistryFindingCode,
+  KeyStatementInput,
+  KeyStatementKind,
+  KeyTrust,
+  KeyTrustEntry,
+  KeyTrustReport,
+  PublishedKeyStatement,
+  TrustKeyInput,
+  VerificationKeysDocument,
+} from './key-statements.js';
+export { instantMs } from './instant.js';
 
 export {
   sha256Hex,

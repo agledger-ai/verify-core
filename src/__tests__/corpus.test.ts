@@ -82,7 +82,8 @@ describe('verify-core conformance corpus (export kind)', () => {
         options.publicKeys = loadJson<Record<string, string>>(vector.options.keysFile);
       }
       if (vector.options?.requireKeyId) options.requireKeyId = vector.options.requireKeyId;
-      if (vector.options?.requireOutOfBandKeys) options.requireOutOfBandKeys = true;
+      // The manifest keeps the engine's pre-2.0 option name.
+      if (vector.options?.requireOutOfBandKeys) options.requireSuppliedKeys = true;
       if (vector.options?.agentKeysFile) {
         options.agentKeys = loadJson<AgentPublicKeyJwk[]>(vector.options.agentKeysFile);
       }
