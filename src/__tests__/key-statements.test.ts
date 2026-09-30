@@ -1,7 +1,9 @@
 import { sign as cryptoSign } from 'node:crypto';
-import { encode as cborEncode, rfc8949EncodeOptions } from 'cborg';
+import { decode as cborDecode, encode as cborEncode, rfc8949EncodeOptions } from 'cborg';
 import { describe, expect, it } from 'vitest';
+import { buildKeyRegistry, type KeyRegistry } from '../chain.js';
 import {
+  applyKeyTrust,
   computeKeyTrust,
   parseDistrustedKeys,
   parseTrustAnchors,
@@ -192,6 +194,107 @@ describe('key statement trust walk', () => {
     const bad = Buffer.concat([Buffer.from([0xd2]), Buffer.from(cborEncode([p, new Map(), bytes, sig], rfc8949EncodeOptions))]);
     expect(walk([], [{ ...g, cose: [good] }], [c.digest]).findings).toEqual([]);
     expect(codes(walk([], [{ ...g, cose: [bad] }], [c.digest]))).toEqual([['KEY_STATEMENT_INVALID', g.id]]);
+  });
+});
+
+describe('each statement check holds on its own', () => {
+  // Every statement below is signed for real; each breaks exactly one rule,
+  // beside a twin that keeps it and walks clean.
+  const genesisPayload = (k: TestKey, over: Partial<Payload['subject']> = {}): Payload => ({
+    typ: 'genesis',
+    iss: 'https://ledger.example',
+    subject: { kid: k.kid, spkiSha256: k.digest, alg: k.alg, spki: k.publicKey, activatedAt: T0, ...over },
+    iat: 1,
+  });
+  const filed = (kind: string, subjectKeyId: string, cose: Buffer[]): KeyStatementInput => ({ id: nextId(), kind, subjectKeyId, cose });
+  const refused = (k: TestKey, st: KeyStatementInput) => {
+    expect(codes(walk([], [st], [k.digest]))).toEqual([['KEY_STATEMENT_INVALID', st.id]]);
+  };
+  const clean = (k: TestKey, st: KeyStatementInput) => {
+    expect(walk([], [st], [k.digest]).findings).toEqual([]);
+  };
+
+  it('the protected header carries the key statement content type', () => {
+    const c = makeKey();
+    const bytes = encodePayload(genesisPayload(c));
+    clean(c, filed('genesis', c.kid, [signStatement(bytes, c)]));
+    refused(c, filed('genesis', c.kid, [signStatement(bytes, c, { cty: 'application/cbor' })]));
+    refused(c, filed('genesis', c.kid, [signStatement(bytes, c, { cty: 60 })]));
+  });
+
+  it('the protected header names the key that signed', () => {
+    const c = makeKey();
+    const other = makeKey();
+    refused(c, filed('genesis', c.kid, [signStatement(encodePayload(genesisPayload(c)), c, { kid: other.kid })]));
+  });
+
+  it('the payload is deterministic CBOR: the same map in another key order is refused', () => {
+    const c = makeKey();
+    const canonical = encodePayload(genesisPayload(c));
+    const decoded = cborDecode(canonical, { useMaps: true }) as Map<string, unknown>;
+    const reordered = cborEncode(new Map([...decoded].reverse()), { mapSorter: () => 0 });
+    expect(Buffer.from(reordered).equals(Buffer.from(canonical))).toBe(false);
+    expect(cborDecode(reordered)).toEqual(cborDecode(canonical));
+    clean(c, filed('genesis', c.kid, [signStatement(canonical, c)]));
+    refused(c, filed('genesis', c.kid, [signStatement(reordered, c)]));
+  });
+
+  it('the subject kid is its SPKI fingerprint', () => {
+    const c = makeKey();
+    const kid = c.kid === 'aaaaaaaaaaaaaaaa' ? 'bbbbbbbbbbbbbbbb' : 'aaaaaaaaaaaaaaaa';
+    refused(c, filed('genesis', kid, [signStatement(encodePayload(genesisPayload(c, { kid })), c, { kid })]));
+  });
+
+  it('the subject alg names the algorithm its SPKI commits to', () => {
+    const c = makeKey();
+    refused(c, filed('genesis', c.kid, [signStatement(encodePayload(genesisPayload(c, { alg: 'ES256' })), c)]));
+    const e = makeKey('ES256');
+    clean(e, filed('genesis', e.kid, [signStatement(encodePayload(genesisPayload(e)), e)]));
+    refused(e, filed('genesis', e.kid, [signStatement(encodePayload(genesisPayload(e, { alg: 'Ed25519' })), e)]));
+  });
+
+  it('a statement carries exactly the signatures its kind takes', () => {
+    const c = makeKey();
+    const n = makeKey();
+    const bytes = encodePayload(genesisPayload(c));
+    refused(c, filed('genesis', c.kid, [signStatement(bytes, c), signStatement(bytes, c)]));
+    const succ = statement('succession', n, { endorser: c, signers: [c, n], activatedAt: T1 });
+    const extra = { ...succ, cose: [...succ.cose, succ.cose[1]!] };
+    expect(walk([], [statement('genesis', c, { signers: [c] }), succ], [c.digest]).findings).toEqual([]);
+    expect(codes(walk([], [extra], [c.digest]))).toEqual([['KEY_STATEMENT_INVALID', extra.id]]);
+  });
+
+  it('the kind a statement is filed under is the kind it signs', () => {
+    const c = makeKey();
+    const g = statement('genesis', c, { signers: [c] });
+    expect(walk([], [g], [c.digest]).findings).toEqual([]);
+    for (const kind of ['succession', 'closure']) {
+      expect(codes(walk([], [{ ...g, kind }], [c.digest]))).toEqual([['KEY_STATEMENT_INVALID', g.id]]);
+    }
+  });
+
+  it('a succession does not endorse its own key, and a closure is not signed by the key it closes', () => {
+    const c = makeKey();
+    const selfSucc = statement('succession', c, { endorser: c, signers: [c, c], activatedAt: T1 });
+    expect(codes(walk([], [selfSucc], [c.digest]))).toEqual([['KEY_STATEMENT_INVALID', selfSucc.id]]);
+    const selfClose = statement('closure', c, { endorser: c, signers: [c], retiredAt: T2 });
+    const trust = walk([row(c, T0)], [selfClose], [c.digest]);
+    expect(codes(trust)).toEqual([['KEY_STATEMENT_INVALID', selfClose.id]]);
+    expect(trust.byDigest.get(c.digest)!.retiredAt).toBeNull();
+  });
+});
+
+describe('a registry row is anchored only under its own fingerprint', () => {
+  it('a trusted key\'s SPKI filed under another key id is unanchored', () => {
+    const c = makeKey();
+    const trust = walk([], [statement('genesis', c, { signers: [c] })], [c.digest]);
+    const key = { spkiBase64: c.publicKey, source: 'embedded' as const };
+    const other = c.kid === 'ffffffffffffffff' ? 'eeeeeeeeeeeeeeee' : 'ffffffffffffffff';
+    expect(applyKeyTrust(buildKeyRegistry([{ keyId: c.kid, ...key }]), trust).get(c.kid)!.trust).toBe('anchored');
+    expect(applyKeyTrust(buildKeyRegistry([{ keyId: other, ...key }]), trust).get(other)!.trust).toBe('unanchored');
+    // A map key that disagrees with the entry's own keyId binds nothing either.
+    const mismatched: KeyRegistry = new Map([[c.kid, { keyId: other, ...key }]]);
+    expect(applyKeyTrust(mismatched, trust).get(c.kid)!.trust).toBe('unanchored');
   });
 });
 
@@ -414,6 +517,46 @@ describe('distrusted keys (the Server\'s VAULT_DISTRUSTED_KEYS)', () => {
       statement('closure', d, { endorser: x, signers: [x], retiredAt: EPOCH_ZERO, createdAt: T1 }),
     ], [c.digest], [{ spkiSha256: d.digest, cutoff: null }]);
     expect(anchoredKids(trust)).toEqual([c.kid]);
+  });
+});
+
+describe('the cutoff of a distrusted key with no instant', () => {
+  it('is the earliest retirement a counting closure signs for it, not the latest', () => {
+    const a = makeKey();
+    const d = makeKey();
+    const x = makeKey();
+    const T2b = '2026-09-03T12:00:00.000000Z';
+    const statements = [
+      statement('genesis', a, { signers: [a], activatedAt: T0, createdAt: T0 }),
+      statement('succession', d, { endorser: a, signers: [a, d], activatedAt: T0, createdAt: T0 }),
+      // Stored before either closure, and inside d's later retirement but not its earlier one.
+      statement('succession', x, { endorser: d, signers: [d, x], activatedAt: T2, createdAt: T2 }),
+      statement('closure', d, { endorser: a, signers: [a], retiredAt: T1, createdAt: T3 }),
+      statement('closure', d, { endorser: a, signers: [a], retiredAt: T2b, createdAt: T3 }),
+    ];
+    expect(walk([], statements, [a.digest]).trusted.has(x.digest)).toBe(true);
+    const trust = walk([], statements, [a.digest], [{ spkiSha256: d.digest, cutoff: null }]);
+    expect(trust.trusted.has(x.digest)).toBe(false);
+    expect(trust.byDigest.get(d.digest)!.retiredAt).toBe(T1);
+  });
+
+  it('is never dated by a closure another distrusted key signed', () => {
+    const a = makeKey();
+    const d = makeKey();
+    const e = makeKey();
+    const statements = [
+      statement('genesis', a, { signers: [a], activatedAt: T0, createdAt: T0 }),
+      statement('succession', d, { endorser: a, signers: [a, d], activatedAt: T0, createdAt: T0 }),
+      statement('succession', e, { endorser: a, signers: [a, e], activatedAt: T0, createdAt: T0 }),
+      statement('closure', d, { endorser: e, signers: [e], retiredAt: T1, createdAt: T1 }),
+    ];
+    const distrust = [{ spkiSha256: d.digest, cutoff: null }, { spkiSha256: e.digest, cutoff: T3 }];
+    const trust = walk([], statements, [a.digest], distrust);
+    // e's closure counts as a closure, but it cannot vouch for when d stopped counting.
+    expect(trust.trusted.has(d.digest)).toBe(false);
+    expect(trust.trusted.has(e.digest)).toBe(true);
+    // Distrust e from the start of time and the closure is still no date for d.
+    expect(walk([], statements, [a.digest], [{ spkiSha256: d.digest, cutoff: null }, { spkiSha256: e.digest, cutoff: T0 }]).trusted.has(d.digest)).toBe(false);
   });
 });
 
