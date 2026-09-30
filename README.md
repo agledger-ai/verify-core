@@ -64,7 +64,10 @@ console.log(result.keyTrust.status); // 'walked'; 'no_anchor' when no trustAncho
 - **Unsigned entries**: an entry with no `signingKeyId` fails
   `CHAIN_ENTRY_UNSIGNED` when it follows a signed entry in its chain, or when
   it was written at or after the earliest `activatedAt` in the key set
-  (export `signingKeyWindows` and your own keys, retired keys included).
+  (export `signingKeyWindows` and your own keys, retired keys included). With
+  `trustAnchors`, the activations an anchored key's statements sign count as
+  well, so an export stripped of its unsigned `signingKeyWindows` is still
+  held to them.
   Earlier unsigned entries, written before the install had a key, count as
   `signatureCoverage.skipped` rather than a break.
 - **Payload binding**: each entry's human-readable `payload` still matches the
@@ -106,7 +109,8 @@ verifier walks the statements from it:
 
 An entry signed by a key the walk does not anchor fails
 `CHAIN_SIGNING_KEY_UNANCHORED`, and each anchored key is held to the window its
-statements sign. Without `trustAnchors`, `keyTrust.status` is `no_anchor`,
+statements sign. Without `trustAnchors` (an empty array is the same as
+none), `keyTrust.status` is `no_anchor`,
 `optionalChecks.key_anchoring` is `skipped_no_input`, and the verdict rests on
 keys nobody pinned: a key written into the database alone would pass.
 
@@ -141,13 +145,24 @@ result invalid, at position 0:
 
 A statement is ordered by its write time where the source carries one (a
 dump's `created_at`). The key documents do not, so a walk over an export or
-`/v1/verification-keys` orders statements by the instant each one signs. For a
-document the Server served the two orders agree. A key retired without
-`force` whose private half later leaks can date a statement before its
-retirement, which only a dump's write order exposes; a forced retirement voids
-every edge out of its key under either order, and so does `distrustedKeys` on
-a document walk, whatever instant the key signed (its closures still count).
-Walk the dump for write-order assurance.
+`/v1/verification-keys` orders statements by the instant each one signs, with
+a closure after any admission that signs the same instant. For a document the
+Server served, the two orders agree. A key retired without `force` whose
+private half later leaks can date a statement before its retirement, and under
+the signed order that statement counts. A forced retirement voids every edge
+out of its key under either order, and so does `distrustedKeys` on a document
+walk, whatever instant the key signed (its closures still count). When a
+retired key may have leaked, retire it with `force` or list it in
+`distrustedKeys`.
+
+A dump walk orders by `created_at`, which the Server's database stamps as it
+stores each row, so it holds a leaked key to the time its statement was really
+stored. That holds only for a dump the Server wrote: `created_at` is not
+signed, and whoever hands you a dump can edit it as easily as a document's
+order, with nothing offline to tell the two apart. So a dump walk adds
+write-order assurance for a dump you took from the Server yourself, or over a
+channel you trust. For any other dump it assures no more than a document walk,
+and `force` or `distrustedKeys` is what closes the gap.
 
 ### Walking a dump or a key document
 
