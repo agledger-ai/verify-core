@@ -719,9 +719,17 @@ export function computeKeyTrust(input: ComputeKeyTrustInput): KeyTrust {
       cutoffs.set(d.spkiSha256, instant === null ? null : { at: instantMs(instant), instant });
     }
   }
-  /** Signed by a distrusted key at or after its cutoff: counts for nothing. */
+  /**
+   * Signed by a distrusted key at or after its cutoff: counts for nothing.
+   * Under the signed order there is no write time to hold a statement to, and
+   * the instant it signs is the leaked key's own word. So every edge out of a
+   * distrusted key is void whatever it signs, and every closure it signed
+   * still counts: dropping an edge or keeping a closure only ever takes trust
+   * away. Narrower than the engine, never wider.
+   */
   const distrusted = (s: Statement, signer: string | null): boolean => {
     if (signer === null || !cutoffs.has(signer)) return false;
+    if (order === 'signed') return s.payload.typ !== 'closure';
     const cutoff = cutoffs.get(signer);
     return cutoff === null || cutoff === undefined || s.storedMs >= cutoff.at;
   };

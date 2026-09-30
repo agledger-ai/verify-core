@@ -145,7 +145,9 @@ dump's `created_at`). The key documents do not, so a walk over an export or
 document the Server served the two orders agree. A key retired without
 `force` whose private half later leaks can date a statement before its
 retirement, which only a dump's write order exposes; a forced retirement voids
-every edge out of its key under either order. Walk the dump for that assurance.
+every edge out of its key under either order, and so does `distrustedKeys` on
+a document walk, whatever instant the key signed (its closures still count).
+Walk the dump for write-order assurance.
 
 ### Walking a dump or a key document
 
