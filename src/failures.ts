@@ -156,7 +156,7 @@ const SUGGESTIONS: Record<FailureCode, string> = {
   CHECKPOINT_UNSIGNED:
     'A checkpoint carries no signing key id but was written at or after the earliest activation time in the signing key set (retired keys included), when every writer holds a registered key. The checkpoint was forged or its key id nulled, and nothing it anchors can be trusted. Escalate to the operator.',
   TENANT_READ_LEAF_HASH_MISMATCH:
-    'An org_admin_reads leaf hash does not match sha256(cose_sign1). The read-log leaf was altered after recording.',
+    'An org_admin_reads leaf_hash does not match the RFC 9162 leaf hash of its envelope, sha256(0x00 || cose_sign1). The read-log leaf was altered after recording.',
   TENANT_READ_LEAF_INDEX_GAP:
     'org_admin_reads leaf indices are not gap-free for this org. A read-log entry was removed. Obtain the complete log.',
   TENANT_READ_SIGNATURE_INVALID:
@@ -164,7 +164,7 @@ const SUGGESTIONS: Record<FailureCode, string> = {
   TENANT_CHECKPOINT_LEAF_COUNT_MISMATCH:
     'A signed tree head commits to more leaves than the dump contains. The read log was truncated below a checkpoint.',
   TENANT_CHECKPOINT_ROOT_MISMATCH:
-    'The recomputed Merkle root does not match the signed root_hash. The read log diverged from what was checkpointed.',
+    'The RFC 9162 Merkle root recomputed over the leaves does not match the signed root_hash. The read log diverged from what was checkpointed.',
   TENANT_CHECKPOINT_SIGNATURE_INVALID:
     'A signed-tree-head COSE_Sign1 signature did not verify. The STH was forged or altered.',
   TENANT_CHECKPOINT_FORK:
