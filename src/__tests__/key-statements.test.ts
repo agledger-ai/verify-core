@@ -601,6 +601,27 @@ describe('a walk over a key document (no write order)', () => {
     }
   });
 
+  it('orders a closure after a succession that signs the same instant, whichever the document lists first', () => {
+    const p = makeKey();
+    const c = makeKey();
+    const g = statement('genesis', p, { signers: [p], activatedAt: T0 });
+    const s = statement('succession', c, { endorser: p, signers: [p, c], activatedAt: T1 });
+    const cl = statement('closure', p, { endorser: c, signers: [c], retiredAt: T1 });
+    for (const order of [[g, s, cl], [g, cl, s], [cl, s, g], [s, cl, g]]) {
+      for (const pin of [p, c]) {
+        const trust = walk([row(p, T0, T1), row(c, T1)], asDocument(order), [pin.digest]);
+        expect(anchoredKids(trust)).toEqual([p.kid, c.kid].sort());
+        expect(trust.findings).toEqual([]);
+        expect(trust.byDigest.get(p.digest)!.retiredAt).toBe(T1);
+      }
+    }
+    // One microsecond later, the succession is after the closure in any listing, and admits nothing.
+    const late = statement('succession', c, { endorser: p, signers: [p, c], activatedAt: '2026-09-02T00:00:00.000001Z' });
+    for (const order of [[g, late, cl], [g, cl, late]]) {
+      expect(walk([], asDocument(order), [p.digest]).trusted.has(c.digest)).toBe(false);
+    }
+  });
+
   it('counts a statement listed twice once', () => {
     const c = makeKey();
     const n = makeKey();
