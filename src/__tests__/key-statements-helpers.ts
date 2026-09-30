@@ -62,11 +62,19 @@ export function encodePayload(p: Payload): Uint8Array {
   return encode(out, rfc8949EncodeOptions);
 }
 
-export function signStatement(payload: Uint8Array, k: TestKey): Buffer {
+/** Protected-header values to sign in place of the ones the format sets, for negative cases. */
+export interface HeaderOverrides {
+  alg?: number;
+  cty?: unknown;
+  /** Hex key id. */
+  kid?: string;
+}
+
+export function signStatement(payload: Uint8Array, k: TestKey, o: HeaderOverrides = {}): Buffer {
   const header = new Map<number, unknown>([
-    [1, k.alg === 'Ed25519' ? -8 : -7],
-    [3, CTY],
-    [4, Uint8Array.from(Buffer.from(k.kid, 'hex'))],
+    [1, o.alg ?? (k.alg === 'Ed25519' ? -8 : -7)],
+    [3, 'cty' in o ? o.cty : CTY],
+    [4, Uint8Array.from(Buffer.from(o.kid ?? k.kid, 'hex'))],
   ]);
   const protectedBstr = encode(header, rfc8949EncodeOptions);
   const toBeSigned = encode(['Signature1', protectedBstr, new Uint8Array(0), payload], rfc8949EncodeOptions);
