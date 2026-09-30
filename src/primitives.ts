@@ -3,7 +3,8 @@
  *
  * Mirrors the AGLedger engine-side implementations:
  *   - COSE_Sign1 verify (RFC 9052 §4.4): audit-vault/encoders/cose-sign1.ts
- *   - Merkle: audit-vault/merkle.ts
+ *   - RFC 9162 §2.1 Merkle tree, for SCITT Receipts and the org_admin_reads
+ *     log alike: audit-vault/merkle-rfc9162.ts
  *
  * Re-implemented here (not imported from any engine/SDK code) so the verifier
  * has zero engine dependency, the load-bearing property of an offline
@@ -1273,49 +1274,85 @@ export function verifyReceipt(
   return ok ? 'ok' : 'root-mismatch';
 }
 
-// --- Merkle tree (org_admin_reads) ---
+// --- Merkle tree (org_admin_reads), RFC 9162 §2.1 over hex leaf hashes ---
 
 /**
- * Tree shape mirrors the engine's merkle.ts: balance-by-duplicating-last-leaf,
- * sha256(hex(left) || hex(right)) over hex strings, no RFC 6962 leaf prefix.
+ * The org_admin_reads log is the same RFC 9162 §2.1 SHA-256 tree the Receipts
+ * above use. Its rows store and serve each hash as lowercase hex, so these are
+ * hex forms of the byte functions: every hex string is decoded to the 32 bytes
+ * it denotes before hashing, never hashed as text.
  */
-function hashPair(left: string, right: string): string {
-  return hash('sha256', left + right, 'hex');
+
+const HEX_32_BYTES = /^[0-9a-f]{64}$/;
+
+function hexToBytes(hex: string): Uint8Array | null {
+  return HEX_32_BYTES.test(hex) ? new Uint8Array(Buffer.from(hex, 'hex')) : null;
 }
 
-export function merkleRoot(leaves: readonly string[]): string {
-  if (leaves.length === 0) return hash('sha256', '', 'hex');
-  let level: string[] = [...leaves];
-  while (level.length > 1) {
-    const next: string[] = [];
-    for (let i = 0; i < level.length; i += 2) {
-      const left = level[i] ?? '';
-      const right = level[i + 1] ?? left;
-      next.push(hashPair(left, right));
-    }
-    level = next;
+function bytesToHex(bytes: Uint8Array): string {
+  return Buffer.from(bytes).toString('hex');
+}
+
+/**
+ * A read-log leaf's `leaf_hash`: hex(SHA-256(0x00 || cose_sign1)), the RFC
+ * 9162 leaf hash of the leaf's COSE_Sign1 bytes. It is also the next leaf
+ * claim's signed `previous_hash`.
+ */
+export function orgReadLeafHash(coseSign1: Uint8Array): string {
+  return bytesToHex(rfc9162LeafHash(coseSign1));
+}
+
+/** Largest power of two strictly below n (n >= 2), the RFC 9162 §2.1.1 split point. */
+function splitPoint(n: number): number {
+  let k = 1;
+  while (k * 2 < n) k *= 2;
+  return k;
+}
+
+function rootOfLeafHashes(leafHashes: readonly Uint8Array[], lo: number, hi: number): Uint8Array {
+  if (hi - lo === 1) return leafHashes[lo]!;
+  const k = splitPoint(hi - lo);
+  return rfc9162NodeHash(rootOfLeafHashes(leafHashes, lo, lo + k), rootOfLeafHashes(leafHashes, lo + k, hi));
+}
+
+/**
+ * RFC 9162 §2.1.1 Merkle Tree Hash over leaf hashes already computed with
+ * {@link orgReadLeafHash}, as hex. The empty tree is SHA-256(""). A leaf hash
+ * that is not 64 lowercase hex characters cannot be a stored `leaf_hash`, so
+ * the result is null rather than a root over bytes nobody wrote.
+ */
+export function orgReadMerkleRoot(leafHashesHex: readonly string[]): string | null {
+  if (leafHashesHex.length === 0) return sha256Hex(new Uint8Array(0));
+  const leaves: Uint8Array[] = [];
+  for (const h of leafHashesHex) {
+    const b = hexToBytes(h);
+    if (b === null) return null;
+    leaves.push(b);
   }
-  return level[0] ?? '';
+  return bytesToHex(rootOfLeafHashes(leaves, 0, leaves.length));
 }
 
-export function verifyInclusion(
-  leafHash: string,
+/**
+ * Verify an org_admin_reads inclusion proof (`GET
+ * /v1/audit/org-reads/checkpoints/{id}/proof`): the RFC 9162 §2.1.3.2 audit
+ * path walk over hex values. A one-leaf tree has an empty path. False on any
+ * value that is not 64 lowercase hex characters.
+ */
+export function verifyOrgReadInclusion(
+  leafHashHex: string,
   leafIndex: number,
   treeSize: number,
-  path: readonly string[],
-  expectedRoot: string,
+  pathHex: readonly string[],
+  expectedRootHex: string,
 ): boolean {
-  if (leafIndex < 0 || leafIndex >= treeSize) return false;
-  let current = leafHash;
-  let index = leafIndex;
-  let levelSize = treeSize;
-  let pathPos = 0;
-  while (levelSize > 1) {
-    const sibling = path[pathPos++];
-    if (sibling === undefined) return false;
-    current = index % 2 === 0 ? hashPair(current, sibling) : hashPair(sibling, current);
-    index = Math.floor(index / 2);
-    levelSize = Math.ceil(levelSize / 2);
+  const leaf = hexToBytes(leafHashHex);
+  const root = hexToBytes(expectedRootHex);
+  if (leaf === null || root === null) return false;
+  const path: Uint8Array[] = [];
+  for (const p of pathHex) {
+    const b = hexToBytes(p);
+    if (b === null) return false;
+    path.push(b);
   }
-  return current === expectedRoot && pathPos === path.length;
+  return verifyRfc9162Inclusion(leaf, leafIndex, treeSize, path, root);
 }
