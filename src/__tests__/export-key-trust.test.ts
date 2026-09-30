@@ -117,6 +117,52 @@ describe('verifyAuditExport with trustAnchors', () => {
     expect(() => verifyAuditExport(load('valid.json'), { trustAnchors: [STRANGER], distrustedKeys: ['sha256:xyz'] })).toThrow(TypeError);
   });
 
+  it('an empty trustAnchors is the same as none', () => {
+    const exp = load('key-substitution.json');
+    const r = verifyAuditExport(exp, { trustAnchors: [] });
+    expect(r).toEqual(verifyAuditExport(exp));
+    expect(r.keyTrust.status).toBe('no_anchor');
+  });
+
+  /** unsigned.json carrying valid.json's key and statements, so a pinned walk anchors a key its entries never use. */
+  function unsignedWithAnchoredKey(): { exp: RecordAuditExportInput; pin: string; activatedAt: string } {
+    const exp = load('unsigned.json');
+    const signed = load('valid.json');
+    exp.exportMetadata.signingPublicKeys = signed.exportMetadata.signingPublicKeys!;
+    exp.exportMetadata.signingKeyStatements = signed.exportMetadata.signingKeyStatements!;
+    const keyId = Object.keys(signed.exportMetadata.signingKeyWindows!)[0]!;
+    return { exp, pin: pinOf(signed), activatedAt: signed.exportMetadata.signingKeyWindows![keyId]!.activatedAt };
+  }
+
+  it('pinned, unsigned entries written before the anchored key\'s signed activation stay reduced coverage', () => {
+    const { exp, pin, activatedAt } = unsignedWithAnchoredKey();
+    expect(exp.entries.every((e) => Date.parse(e.createdAt!) < Date.parse(activatedAt))).toBe(true);
+    const r = verifyAuditExport(exp, { trustAnchors: [pin] });
+    expect(r.valid).toBe(true);
+    expect(r.keyTrust.anchoredKeyIds).toHaveLength(1);
+    expect(r.signatureCoverage.skipped).toBe(3);
+  });
+
+  it('pinned, unsigned entries written after the anchored key\'s signed activation fail CHAIN_ENTRY_UNSIGNED with the windows stripped', () => {
+    const { exp, pin } = unsignedWithAnchoredKey();
+    for (const e of exp.entries) e.createdAt = '2026-09-30T23:00:00.000Z';
+    const signed = load('valid.json');
+    const withWindows = structuredClone(exp);
+    withWindows.exportMetadata.signingKeyWindows = signed.exportMetadata.signingKeyWindows!;
+    expect(verifyAuditExport(withWindows, { trustAnchors: [pin] }).brokenAt?.code).toBe('CHAIN_ENTRY_UNSIGNED');
+    // The windows are the export's unsigned word; without them the statements still date the key.
+    delete exp.exportMetadata.signingKeyWindows;
+    const r = verifyAuditExport(exp, { trustAnchors: [pin] });
+    expect(r.valid).toBe(false);
+    expect(r.brokenAt).toMatchObject({ position: 1, code: 'CHAIN_ENTRY_UNSIGNED' });
+    // A window moved later cannot loosen it either.
+    const late = structuredClone(withWindows);
+    for (const w of Object.values(late.exportMetadata.signingKeyWindows!)) w.activatedAt = '2027-01-01T00:00:00.000Z';
+    expect(verifyAuditExport(late, { trustAnchors: [pin] }).brokenAt?.code).toBe('CHAIN_ENTRY_UNSIGNED');
+    // Without a pin nothing is signed, and nothing dates the key.
+    expect(verifyAuditExport(exp).valid).toBe(true);
+  });
+
   it('an unsigned history needs no anchor to stay reduced coverage', () => {
     const r = verifyAuditExport(load('unsigned.json'), { trustAnchors: [STRANGER] });
     expect(r.valid).toBe(true);
