@@ -560,6 +560,28 @@ describe('the cutoff of a distrusted key with no instant', () => {
   });
 });
 
+describe('a key admitted only by a distrusted key', () => {
+  it('cannot close a key: its closure is not signed by an anchored key', () => {
+    const a = makeKey();
+    const d = makeKey();
+    const x = makeKey();
+    const y = makeKey();
+    const closure = statement('closure', y, { endorser: x, signers: [x], retiredAt: T3, createdAt: T3 });
+    const statements = [
+      statement('genesis', a, { signers: [a], activatedAt: T0, createdAt: T0 }),
+      statement('succession', d, { endorser: a, signers: [a, d], activatedAt: T0, createdAt: T0 }),
+      statement('succession', y, { endorser: a, signers: [a, y], activatedAt: T0, createdAt: T0 }),
+      statement('succession', x, { endorser: d, signers: [d, x], activatedAt: T2, createdAt: T2 }),
+      closure,
+    ];
+    expect(walk([], statements, [a.digest]).byDigest.get(y.digest)!.retiredAt).toBe(T3);
+    const trust = walk([], statements, [a.digest], [{ spkiSha256: d.digest, cutoff: T1 }]);
+    expect(trust.trusted.has(x.digest)).toBe(false);
+    expect(trust.byDigest.get(y.digest)!.retiredAt).toBeNull();
+    expect(trust.findings.filter((f) => f.statementId === closure.id).map((f) => f.code)).toEqual(['KEY_CLOSURE_INVALID']);
+  });
+});
+
 describe('a statement row that holds no signature', () => {
   it('is a finding and does not stop the walk over the rest', () => {
     const c = makeKey();
