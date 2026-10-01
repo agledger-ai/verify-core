@@ -107,7 +107,10 @@ export interface KeyStatementInput {
   /**
    * The database write time (the dump's `created_at`). Give it for every
    * statement or for none: with it the walk applies the write order, without
-   * it the signed order (see the module comment).
+   * it the signed order (see the module comment). Under the write order a
+   * statement whose `createdAt` is not an RFC 3339 instant cannot be placed,
+   * and is KEY_STATEMENT_INVALID (`keyStatementFromDumpRow` gives `''` for a
+   * row without one).
    */
   createdAt?: string;
 }
@@ -616,6 +619,9 @@ export function computeKeyTrust(input: ComputeKeyTrustInput): KeyTrust {
   if (withTime !== 0 && withTime !== input.statements.length) {
     throw new TypeError('Key statements must all carry createdAt (a dump) or none (a key document); this input mixes them.');
   }
+  // A listed key with no key material (a dump row whose public_key was nulled)
+  // vouches for nothing and is no endorser's fallback.
+  const listedKeys = input.keys.filter((k) => typeof k.publicKey === 'string' && k.publicKey !== '');
   const order: KeyTrust['order'] = input.statements.length > 0 && withTime === input.statements.length ? 'written' : 'signed';
   let statementInputs = [...input.statements];
   if (order === 'signed') {
@@ -631,10 +637,6 @@ export function computeKeyTrust(input: ComputeKeyTrustInput): KeyTrust {
       seen.add(key);
       return true;
     });
-  } else {
-    for (const s of statementInputs) {
-      if (Number.isNaN(instantMs(s.createdAt!))) throw new TypeError(`Key statement createdAt ${JSON.stringify(s.createdAt)} is not an RFC 3339 instant.`);
-    }
   }
 
   const findings: KeyRegistryFinding[] = [];
@@ -651,14 +653,23 @@ export function computeKeyTrust(input: ComputeKeyTrustInput): KeyTrust {
       keyByDigest.set(payload.subject.spkiSha256, { spki: payload.subject.spki, alg: payload.subject.alg });
     }
   }
-  for (const key of input.keys) {
+  for (const key of listedKeys) {
     const digest = spkiSha256(key.publicKey);
-    if (!keyByDigest.has(digest)) keyByDigest.set(digest, { spki: key.publicKey, alg: key.algorithm ?? null });
+    if (!keyByDigest.has(digest)) keyByDigest.set(digest, { spki: key.publicKey, alg: typeof key.algorithm === 'string' ? key.algorithm : null });
   }
 
-  const checked = statementInputs.map((st) => checkKeyStatement(st, keyByDigest));
+  // Under the write order a statement with no write time cannot be placed:
+  // the Server writes one on every row, so it was edited, and it admits nothing.
+  const checked = statementInputs.map((st) => {
+    const c = checkKeyStatement(st, keyByDigest);
+    if (order !== 'written' || !Number.isNaN(instantMs(st.createdAt!))) return c;
+    return { ...c, verdict: 'invalid' as const, detail: 'the row has no parseable created_at to order it by' };
+  });
   const sortKey = (c: CheckedKeyStatement): number | string => {
-    if (order === 'written') return instantMs(c.input.createdAt!);
+    if (order === 'written') {
+      const at = instantMs(c.input.createdAt!);
+      return Number.isNaN(at) ? Number.POSITIVE_INFINITY : at;
+    }
     return signedInstantOf(c) ?? '￿';
   };
   // Under the signed order a closure sorts after every admission that signs
@@ -796,7 +807,7 @@ export function computeKeyTrust(input: ComputeKeyTrustInput): KeyTrust {
     byDigest.set(digest, created);
     return created;
   };
-  for (const key of input.keys) entryFor(spkiSha256(key.publicKey));
+  for (const key of listedKeys) entryFor(spkiSha256(key.publicKey));
   for (const d of undecided) entryFor(d);
   const cutByDistrust = new Set<string>();
   for (const d of trusted) {
@@ -875,7 +886,7 @@ export function computeKeyTrust(input: ComputeKeyTrustInput): KeyTrust {
 
   // Findings on listed keys: their columns against the signed values, compared
   // at millisecond precision, the precision a dump or key document carries.
-  for (const key of input.keys) {
+  for (const key of listedKeys) {
     const entry = entryFor(spkiSha256(key.publicKey));
     if (!entry.trusted || key.keyId !== entry.keyId) continue;
     if (entry.activatedAt !== null && typeof key.activatedAt === 'string' && instantMs(key.activatedAt) !== instantMs(entry.activatedAt)) {
@@ -921,15 +932,20 @@ export interface DumpKeyStatementRow {
   created_at: string;
 }
 
-/** Map a dump statement row onto the walk's input, binding every column. */
+/**
+ * Map a dump statement row onto the walk's input, binding every column. The
+ * Server writes `subject_key_id` and `created_at` on every row, so one that is
+ * missing or not a string maps to `''`, which matches no signed key id and
+ * places the statement nowhere: it is KEY_STATEMENT_INVALID.
+ */
 export function keyStatementFromDumpRow(row: DumpKeyStatementRow): KeyStatementInput {
   return {
     id: row.id,
     kind: row.kind,
-    subjectKeyId: row.subject_key_id,
+    subjectKeyId: typeof row.subject_key_id === 'string' ? row.subject_key_id : '',
     endorserKeyId: row.endorser_key_id,
     cose: Array.isArray(row.statement) ? row.statement : [],
-    createdAt: row.created_at,
+    createdAt: typeof row.created_at === 'string' ? row.created_at : '',
   };
 }
 
@@ -948,7 +964,7 @@ export function trustKeyFromDumpRow(row: DumpSigningKeyRow): TrustKeyInput {
   return {
     keyId: row.key_id,
     publicKey: row.public_key,
-    algorithm: row.algorithm ?? null,
+    algorithm: typeof row.algorithm === 'string' ? row.algorithm : null,
     status: row.status === 'active' || row.status === 'retired' ? row.status : null,
     activatedAt: row.activated_at ?? null,
     retiredAt: row.retired_at ?? null,
@@ -1038,7 +1054,7 @@ export function keyStatementsFromVerificationKeys(doc: VerificationKeysDocument)
 export function applyKeyTrust(registry: KeyRegistry, trust: KeyTrust): KeyRegistry {
   const out = new Map<string, VerificationKey>();
   for (const [keyId, key] of registry) {
-    const digest = spkiSha256(key.spkiBase64);
+    const digest = typeof key.spkiBase64 === 'string' ? spkiSha256(key.spkiBase64) : '';
     const bound = keyId === digest.slice(0, 16) && key.keyId === keyId;
     const anchored = bound && trust.trusted.has(digest);
     const state: KeyTrustState = anchored ? 'anchored' : bound && trust.undecided.has(digest) ? 'undecided' : 'unanchored';
@@ -1084,6 +1100,7 @@ export interface KeyTrustReport {
 /** Summarize a registry after `applyKeyTrust` (or with `trust` null when no walk ran). */
 export function reportKeyTrust(registry: KeyRegistry, trust: KeyTrust | null, anchoredFrom: string | null): KeyTrustReport {
   const ids = (state: KeyTrustState) => [...registry.values()].filter((k) => k.trust === state).map((k) => k.keyId).sort();
+  if (typeof anchoredFrom !== 'string') anchoredFrom = null;
   if (trust === null) {
     return {
       status: 'no_anchor',

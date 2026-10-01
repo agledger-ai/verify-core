@@ -112,9 +112,17 @@ export interface VerificationKey {
 
 export type KeyRegistry = ReadonlyMap<string, VerificationKey>;
 
+/**
+ * Index keys by key id. A key whose `spkiBase64` is not a non-empty string
+ * carries no key material (a registry row with its public key nulled), so it
+ * is left out: an entry naming it fails CHAIN_SIGNATURE_MISSING_KEY.
+ */
 export function buildKeyRegistry(keys: readonly VerificationKey[]): KeyRegistry {
   const map = new Map<string, VerificationKey>();
-  for (const k of keys) map.set(k.keyId, k);
+  for (const k of keys) {
+    if (typeof k.spkiBase64 !== 'string' || k.spkiBase64 === '') continue;
+    map.set(k.keyId, k);
+  }
   return map;
 }
 
@@ -160,8 +168,14 @@ export interface NormalizedEntry {
   /** Base64-encoded canonical COSE_Sign1 envelope. */
   coseSign1: string;
   signingKeyId: string | null;
-  /** ISO-8601 write time, for temporal key-validity (dump path). */
-  createdAt?: string;
+  /**
+   * ISO-8601 write time, for temporal key-validity and the unsigned-entry
+   * rule. The engine writes one on every entry, so wherever the walk needs it
+   * (the entry's key carries a window, or the entry is unsigned and the key
+   * set dates the start of signing) a missing or unparseable value fails
+   * CHAIN_MALFORMED_ENTRY rather than skipping the check.
+   */
+  createdAt?: string | null;
   /** Inputs for the binding-integrity check (dump path). */
   binding?: {
     recordId: string | null;
@@ -321,20 +335,39 @@ export function earliestKeyActivation(
  * Whether a row with no signing key id, written at `writtenAt`, falls inside
  * the era in which the install signs everything: at or after `signingSince`
  * (see `earliestKeyActivation`). This is the rule for an unsigned checkpoint
- * (CHECKPOINT_UNSIGNED) and the time half of the rule for an unsigned entry
- * (CHAIN_ENTRY_UNSIGNED). False when either time is absent or unparseable:
- * without both, the verifier cannot place the row, and the row stays what it
- * was before this rule existed.
+ * (CHECKPOINT_UNSIGNED) and an unsigned read-log leaf or tree head, and the
+ * time half of the rule for an unsigned entry (CHAIN_ENTRY_UNSIGNED).
+ *
+ * False when `signingSince` is absent or unparseable: with no instant from
+ * which the install signs, nothing has to be signed. True when `signingSince`
+ * is known and `writtenAt` is missing or unparseable: the engine times every
+ * row, so a row with no readable time was edited, and it cannot be placed
+ * before signing began. It fails closed rather than reading as early history.
  */
 export function writtenWhileSigning(
-  writtenAt: string | null | undefined,
+  writtenAt: unknown,
   signingSince: string | null | undefined,
 ): boolean {
-  if (!writtenAt || !signingSince) return false;
-  const written = Date.parse(writtenAt);
+  if (typeof signingSince !== 'string') return false;
   const since = Date.parse(signingSince);
-  if (Number.isNaN(written) || Number.isNaN(since)) return false;
+  if (Number.isNaN(since)) return false;
+  const written = typeof writtenAt === 'string' ? Date.parse(writtenAt) : Number.NaN;
+  if (Number.isNaN(written)) return true;
   return written >= since;
+}
+
+/** Whether `value` is an RFC 3339 instant the walk can place. */
+function isInstant(value: unknown): value is string {
+  return typeof value === 'string' && !Number.isNaN(instantMs(value));
+}
+
+/**
+ * The order the walk sorts entries in: by `chainPosition`, an entry whose
+ * position is not a safe integer after every one whose is, ties in input
+ * order. Such an entry then fails CHAIN_POSITION_GAP at its place.
+ */
+function positionKey(position: unknown): number {
+  return Number.isSafeInteger(position) ? (position as number) : Number.POSITIVE_INFINITY;
 }
 
 /** What the walk knows about whether an unsigned entry was allowed at this point. */
@@ -356,7 +389,10 @@ export function verifyChain(
   options: VerifyChainOptions = {},
 ): ChainResult {
   const scopeId = entries[0]?.scopeId ?? '(empty)';
-  const sorted = [...entries].sort((a, b) => a.chainPosition - b.chainPosition);
+  const sorted = entries
+    .map((entry, at) => ({ entry, at, key: positionKey(entry.chainPosition) }))
+    .sort((a, b) => (a.key === b.key ? a.at - b.at : a.key < b.key ? -1 : 1))
+    .map(({ entry }) => entry);
 
   const entryResults: ChainEntryResult[] = [];
   const coverage = { signed: 0, unsigned: 0, skipped: 0, total: sorted.length };
@@ -542,12 +578,12 @@ function verifyEntry(
     );
   }
 
-  if (!entry.coseSign1 || !entry.payloadHash) {
+  if (typeof entry.coseSign1 !== 'string' || typeof entry.payloadHash !== 'string' || !entry.coseSign1 || !entry.payloadHash) {
     return fail(
       scopeId,
       expectedPosition,
       'CHAIN_MALFORMED_ENTRY',
-      'Entry is missing coseSign1 or payloadHash.',
+      'Entry is missing coseSign1 or payloadHash, or carries one that is not a string.',
     );
   }
 
@@ -692,6 +728,17 @@ function verifyEntry(
         'Entry has no signingKeyId but follows a signed entry in the same chain.',
       );
     }
+    // The engine times every entry. Without a time the walk can read, an
+    // unsigned entry cannot be placed before signing began, so it is not
+    // early history: it fails closed.
+    if (mustSign.signingSince !== null && !isInstant(entry.createdAt)) {
+      return fail(
+        scopeId,
+        expectedPosition,
+        'CHAIN_MALFORMED_ENTRY',
+        `Entry has no signingKeyId and no parseable createdAt, so it cannot be placed before the earliest signing key activation ${mustSign.signingSince}.`,
+      );
+    }
     if (writtenWhileSigning(entry.createdAt, mustSign.signingSince)) {
       return fail(
         scopeId,
@@ -790,7 +837,7 @@ function verifyEntry(
   // key material commits to. A registry row that lies about its own key is the
   // signature of a mis-registered key (the pre-guard P-256 corruption shape) or
   // a rewritten registry, and nothing verified against it can be trusted.
-  if (key.algorithm !== undefined) {
+  if (typeof key.algorithm === 'string') {
     const keyAlg = resolveKeyAlgorithm(key.spkiBase64);
     if (
       typeof keyAlg === 'object' &&
@@ -805,12 +852,21 @@ function verifyEntry(
     }
   }
 
-  // Input-gated: temporal key-validity. Only when both the key window and the
-  // entry write time are present. Compared at millisecond precision, the
-  // precision of an entry's write time, truncating a microsecond window edge
-  // the way the engine does.
-  if (entry.createdAt && (key.activatedAt || key.retiredAt)) {
+  // Input-gated: temporal key-validity, whenever the key carries a window.
+  // Compared at millisecond precision, the precision of an entry's write time,
+  // truncating a microsecond window edge the way the engine does. The engine
+  // times every entry, so an entry with no time the walk can read cannot be
+  // placed inside the window, and fails closed rather than skipping it.
+  if (typeof key.activatedAt === 'string' || typeof key.retiredAt === 'string') {
     optionalChecks.key_temporal = 'applied';
+    if (!isInstant(entry.createdAt)) {
+      return fail(
+        scopeId,
+        expectedPosition,
+        'CHAIN_MALFORMED_ENTRY',
+        `Entry has no parseable createdAt, so it cannot be placed inside key ${entry.signingKeyId}'s window.`,
+      );
+    }
     const temporal = temporalKeyFailure(entry.createdAt, key);
     if (temporal) {
       return fail(scopeId, expectedPosition, temporal.code, temporal.detail);
@@ -921,7 +977,7 @@ function temporalKeyFailure(
 ): { code: 'CHAIN_KEY_NOT_YET_ACTIVE' | 'CHAIN_KEY_EXPIRED'; detail: string } | null {
   const written = instantMs(createdAt);
   if (Number.isNaN(written)) return null;
-  if (key.activatedAt) {
+  if (typeof key.activatedAt === 'string' && key.activatedAt) {
     const activated = instantMs(key.activatedAt);
     if (!Number.isNaN(activated) && written < activated) {
       return {
@@ -930,7 +986,7 @@ function temporalKeyFailure(
       };
     }
   }
-  if (key.retiredAt) {
+  if (typeof key.retiredAt === 'string' && key.retiredAt) {
     const retired = instantMs(key.retiredAt);
     if (!Number.isNaN(retired) && written > retired) {
       return {

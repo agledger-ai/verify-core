@@ -187,8 +187,25 @@ describe('rule 2: an unsigned entry written once the install signs', () => {
     expect(result.valid).toBe(true);
   });
 
-  it('does not apply to an entry that carries no createdAt', () => {
+  it('an unsigned entry with no createdAt cannot be placed before signing began, and fails closed', () => {
+    for (const blank of [undefined, null, 'garbage']) {
+      const exp = validAllNulled();
+      for (const e of exp.entries) {
+        if (blank === undefined) delete e.createdAt;
+        else e.createdAt = blank;
+      }
+      const result = verifyAuditExport(exp);
+      expect(result.valid).toBe(false);
+      expect(result.brokenAt).toMatchObject({ position: 1, code: 'CHAIN_MALFORMED_ENTRY' });
+      expect(result.brokenAt?.detail).toBe(
+        `Entry has no signingKeyId and no parseable createdAt, so it cannot be placed before the earliest signing key activation ${realWindow().window.activatedAt}.`,
+      );
+    }
+  });
+
+  it('with no instant from which the install signs, an unsigned entry needs no createdAt', () => {
     const exp = validAllNulled();
+    delete exp.exportMetadata.signingKeyWindows;
     for (const e of exp.entries) delete e.createdAt;
     expect(verifyAuditExport(exp).valid).toBe(true);
   });
@@ -292,9 +309,15 @@ describe('the checkpoint rule and its helpers', () => {
     expect(writtenWhileSigning(shiftMs(window.activatedAt, -1), window.activatedAt)).toBe(false);
   });
 
-  it('cannot place a row without both times', () => {
+  it('with no instant from which the install signs, no row has to be signed', () => {
     expect(writtenWhileSigning(window.activatedAt, null)).toBe(false);
-    expect(writtenWhileSigning(undefined, window.activatedAt)).toBe(false);
-    expect(writtenWhileSigning('garbage', window.activatedAt)).toBe(false);
+    expect(writtenWhileSigning(undefined, undefined)).toBe(false);
+    expect(writtenWhileSigning(window.activatedAt, 'garbage')).toBe(false);
+  });
+
+  it('a row with no readable time, once signing began, fails closed rather than reading as early history', () => {
+    for (const blank of [undefined, null, '', 'garbage', 7]) {
+      expect(writtenWhileSigning(blank, window.activatedAt)).toBe(true);
+    }
   });
 });

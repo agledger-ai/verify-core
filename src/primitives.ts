@@ -922,15 +922,17 @@ const RECORD_STATE_RESERVED_KEYS: ReadonlySet<string> = new Set([
  * build-vault-claim.ts). This is the verifier-side mirror.
  *
  * Returns null when the row's payload is structurally insufficient (e.g.
- * SCHEMA_REGISTERED missing manifestDigest); the caller surfaces null as a
- * binding mismatch rather than throwing, so an attacker who zeros out payload
- * can't crash the verifier.
+ * SCHEMA_REGISTERED missing manifestDigest) or is not a JSON object at all (a
+ * nulled or retyped column); the caller surfaces null as a binding mismatch
+ * rather than throwing, so an attacker who zeros out payload can't crash the
+ * verifier.
  */
 export function buildPredicateForRow(
   recordId: string | null,
   entryType: string,
   payload: Record<string, unknown>,
 ): Record<string, unknown> | null {
+  if (payload === null || typeof payload !== 'object' || Array.isArray(payload)) return null;
   if (SCHEMA_EVENT_TYPES.has(entryType)) {
     return buildSchemaEventPredicateForRow(entryType, payload);
   }

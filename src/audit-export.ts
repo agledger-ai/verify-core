@@ -50,8 +50,12 @@ export interface AuditExportEntryInput {
   chainPosition?: number;
   /** Legacy alias for `chainPosition`. */
   position?: number;
-  /** ISO-8601 write time. Engine ≥ v0.26.x; gates the temporal key-validity check. */
-  createdAt?: string;
+  /**
+   * ISO-8601 write time. Where the walk needs it (a key window, or an unsigned
+   * entry once signing began) a missing or unparseable one fails
+   * CHAIN_MALFORMED_ENTRY.
+   */
+  createdAt?: string | null;
   /** OIDC issuer the actor was synthesized from (engine ≥ v0.26.x). */
   actorOidcIss?: string | null;
   /** OIDC subject the actor was synthesized from (engine ≥ v0.26.x). */
@@ -185,7 +189,8 @@ export interface VerifyExportOptions {
    * `@<RFC 3339 instant>`): what such a key stored at or after the instant
    * (with none, from the retirement a trusted key signed for it, and with
    * neither, ever) counts for nothing in the walk. Give auditors the entries
-   * the operator set. Used only with `trustAnchors`.
+   * the operator set. Used only with `trustAnchors`: given without them it
+   * throws `TypeError`, since nothing would apply it.
    */
   distrustedKeys?: ReadonlyArray<string | DistrustedKey>;
   /**
@@ -268,10 +273,30 @@ export interface VerifyExportResult {
 const SUPPORTED_FORMAT_VERSION = '2.0';
 const SUPPORTED_CANONICALIZATION = 'RFC8949-CDE';
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+/**
+ * Verify one record's `/audit-export` document offline.
+ *
+ * Throws `TypeError` when the document is not an export at all (no
+ * `exportMetadata` object, or `entries` that is not an array), on a malformed
+ * option, and on `distrustedKeys` without `trustAnchors`. A malformed entry
+ * inside a well-formed document is a failure code on that entry, never a throw.
+ */
 export function verifyAuditExport(
   exportData: RecordAuditExportInput,
   options: VerifyExportOptions = {},
 ): VerifyExportResult {
+  if (!isRecord(exportData) || !isRecord(exportData.exportMetadata)
+    || (exportData.entries !== undefined && exportData.entries !== null && !Array.isArray(exportData.entries))) {
+    throw new TypeError('Expected an /audit-export document: { exportMetadata: { recordId, ... }, entries: [...] }.');
+  }
+  if ((options.trustAnchors === undefined || options.trustAnchors.length === 0)
+    && options.distrustedKeys !== undefined && options.distrustedKeys.length > 0) {
+    throw new TypeError('distrustedKeys act only inside the key-statement walk, which runs from trustAnchors; pass trustAnchors as well.');
+  }
   const meta = exportData.exportMetadata;
   const entries = exportData.entries ?? [];
 
@@ -323,14 +348,19 @@ export function verifyAuditExport(
   const signedActivations = trust === null ? [] : [...trust.byDigest.values()].filter((k) => k.trusted);
   const signingSince = earliestKeyActivation([...resolvedKeys, ...windowOnly, ...signedActivations]);
   const keyTrust = reportKeyTrust(keys, trust, meta.anchoredFrom ?? null);
-  const normalized: NormalizedEntry[] = entries.map((e) => {
+  const normalized: NormalizedEntry[] = entries.map((raw) => {
+    // An entry or integrity block that is not an object carries none of the
+    // fields the walk reads, and fails CHAIN_MALFORMED_ENTRY there.
+    const e: Partial<AuditExportEntryInput> = isRecord(raw) ? raw : {};
+    const integrity: Partial<AuditExportEntryInput['integrity']> = isRecord(e.integrity) ? e.integrity : {};
     const base: NormalizedEntry = {
       scopeId: meta.recordId,
       chainPosition: e.chainPosition ?? e.position ?? -1,
-      payloadHash: e.integrity.payloadHash,
-      previousHash: e.integrity.previousHash,
-      coseSign1: e.integrity.coseSign1,
-      signingKeyId: e.integrity.signingKeyId,
+      payloadHash: integrity.payloadHash as string,
+      previousHash: integrity.previousHash as string | null,
+      coseSign1: integrity.coseSign1 as string,
+      signingKeyId: integrity.signingKeyId as string | null,
+      createdAt: e.createdAt,
     };
     // Binding-integrity: when the export carries the denormalized row `payload`
     // (engine ≥ v0.26.x), cross-check it against the predicate decoded from the
@@ -360,7 +390,6 @@ export function verifyAuditExport(
         actorOwnerId: e.actorOwnerId ?? null,
       };
     }
-    if (e.createdAt) base.createdAt = e.createdAt;
     // The synthesized flag is the marker that the export carries the OIDC
     // wire shape at all. Older exports omit it entirely; new exports always
     // include it (false/null/true). Setting `oidcActor` flips `oidc_actor`
@@ -507,7 +536,7 @@ function resolveKeys(
   if (windows) {
     for (const [keyId, window] of Object.entries(windows)) {
       const existing = byId.get(keyId);
-      if (!existing) continue;
+      if (!existing || !isRecord(window)) continue;
       // Trust hierarchy on the temporal axis: when the caller supplied this
       // key AND brought their own activation/retirement window, the export's
       // (untrusted) signingKeyWindows MUST NOT overwrite it. A compromised
