@@ -103,6 +103,13 @@ export interface VerificationKey {
   activatedAt?: string;
   retiredAt?: string | null;
   /**
+   * The instant from which `distrustedKeys` (`VAULT_DISTRUSTED_KEYS` on the
+   * Server) voids what this key signs, set by `applyKeyTrust` when it ends the
+   * window before `retiredAt`. Entries written after it fail CHAIN_KEY_EXPIRED
+   * worded as past the distrust cutoff: the key was not retired there.
+   */
+  distrustCutoff?: string;
+  /**
    * The key-statement walk's verdict on this key, set by `applyKeyTrust`.
    * Absent when no walk ran (no `trustAnchors`), and the result then reports
    * `optionalChecks.key_anchoring: skipped_no_input`; with a walk and no
@@ -870,7 +877,7 @@ function verifyEntry(
   // truncating a microsecond window edge the way the engine does. The engine
   // times every entry, so an entry with no time the walk can read cannot be
   // placed inside the window, and fails closed rather than skipping it.
-  if (typeof key.activatedAt === 'string' || typeof key.retiredAt === 'string') {
+  if (typeof key.activatedAt === 'string' || typeof key.retiredAt === 'string' || typeof key.distrustCutoff === 'string') {
     optionalChecks.key_temporal = 'applied';
     if (!isInstant(entry.createdAt)) {
       return fail(
@@ -996,6 +1003,15 @@ function temporalKeyFailure(
       return {
         code: 'CHAIN_KEY_NOT_YET_ACTIVE',
         detail: `Entry written ${createdAt} predates key ${key.keyId} activation ${key.activatedAt}.`,
+      };
+    }
+  }
+  if (typeof key.distrustCutoff === 'string' && key.distrustCutoff) {
+    const cutoff = instantMs(key.distrustCutoff);
+    if (!Number.isNaN(cutoff) && written > cutoff) {
+      return {
+        code: 'CHAIN_KEY_EXPIRED',
+        detail: `Entry written ${createdAt} postdates ${key.distrustCutoff}, the instant distrustedKeys (VAULT_DISTRUSTED_KEYS on the Server) gives for key ${key.keyId}; the key was not retired then.`,
       };
     }
   }

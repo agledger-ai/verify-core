@@ -184,6 +184,13 @@ export interface KeyTrustEntry {
   activatedAt: string | null;
   /** The signed upper edge, or null when no counting closure signs one. */
   retiredAt: string | null;
+  /**
+   * The instant from which `distrustedKeys` voids what this key signs, when it
+   * ends the key's window before its signed retirement, else null. The key is
+   * not retired there: entries written after it fail CHAIN_KEY_EXPIRED as
+   * past the distrust cutoff, not as past a retirement.
+   */
+  distrustCutoff: string | null;
 }
 
 export interface KeyTrust {
@@ -802,23 +809,19 @@ export function computeKeyTrust(input: ComputeKeyTrustInput): KeyTrust {
     const existing = byDigest.get(digest);
     if (existing) return existing;
     const created: KeyTrustEntry = {
-      keyId: digest.slice(0, 16), spkiSha256: digest, trusted: trusted.has(digest), undecided: undecided.has(digest), activatedAt: null, retiredAt: null,
+      keyId: digest.slice(0, 16), spkiSha256: digest, trusted: trusted.has(digest), undecided: undecided.has(digest), activatedAt: null, retiredAt: null, distrustCutoff: null,
     };
     byDigest.set(digest, created);
     return created;
   };
   for (const key of listedKeys) entryFor(spkiSha256(key.publicKey));
   for (const d of undecided) entryFor(d);
-  const cutByDistrust = new Set<string>();
   for (const d of trusted) {
     const entry = entryFor(d);
     entry.activatedAt = activatedAt.get(d) ?? null;
     entry.retiredAt = closedWindow.get(d) ?? null;
     const cutoff = cutoffs.get(d)?.instant;
-    if (cutoff !== undefined && (entry.retiredAt === null || cutoff < entry.retiredAt)) {
-      entry.retiredAt = cutoff;
-      cutByDistrust.add(d);
-    }
+    if (cutoff !== undefined && (entry.retiredAt === null || cutoff < entry.retiredAt)) entry.distrustCutoff = cutoff;
   }
 
   // Findings on statements.
@@ -850,9 +853,10 @@ export function computeKeyTrust(input: ComputeKeyTrustInput): KeyTrust {
       const cutoff = cutoffs.get(e);
       const closed = s.payload.subject.retiredAt;
       const now = byDigest.get(s.subject);
+      const ends = now?.distrustCutoff ?? now?.retiredAt ?? null;
       // Dropping a closure the distrusted key signed reopens its subject.
       const reopened = s.payload.typ === 'closure' && closed !== undefined && now?.trusted === true
-        && (now.retiredAt === null || now.retiredAt > closed)
+        && (ends === null || ends > closed)
         ? ` It retired ${s.payload.subject.kid} at ${closed}, and no closure that counts retires it that early now; if ${s.payload.subject.kid} leaked as well, add sha256:${s.subject} to distrustedKeys too.`
         : '';
       finding(s.payload.typ === 'closure' ? 'KEY_CLOSURE_INVALID' : 'KEY_STATEMENT_INVALID', s,
@@ -892,7 +896,7 @@ export function computeKeyTrust(input: ComputeKeyTrustInput): KeyTrust {
     if (entry.activatedAt !== null && typeof key.activatedAt === 'string' && instantMs(key.activatedAt) !== instantMs(entry.activatedAt)) {
       findings.push({ code: 'CHAIN_KEY_WINDOW_DRIFT', keyId: key.keyId, statementId: null, detail: `activatedAt ${key.activatedAt} differs from the signed ${entry.activatedAt}` });
     }
-    if (cutByDistrust.has(entry.spkiSha256)) continue;
+    if (entry.distrustCutoff !== null) continue;
     if (key.status === 'retired') {
       if (entry.retiredAt === null) {
         findings.push({ code: 'KEY_CLOSURE_INVALID', keyId: key.keyId, statementId: null, detail: 'the key is listed as retired and no counting closure signs its retirement' });
@@ -1064,6 +1068,7 @@ export function applyKeyTrust(registry: KeyRegistry, trust: KeyTrust): KeyRegist
     if (anchored && signed) {
       if (signed.activatedAt !== null) next.activatedAt = signed.activatedAt;
       if (signed.retiredAt !== null) next.retiredAt = signed.retiredAt;
+      if (signed.distrustCutoff !== null) next.distrustCutoff = signed.distrustCutoff;
     } else {
       if (_a !== undefined) next.activatedAt = _a;
       if (_r !== undefined) next.retiredAt = _r;
