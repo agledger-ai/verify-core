@@ -20,12 +20,12 @@ import { decodeCoseSign1, extractActorClaim } from '../primitives.js';
  * guide's own advice unverifiable.
  *
  * Both fixtures are real engine output: the conformance corpus (admin actor)
- * and a live 1.8.0 lifecycle export (agent actor).
+ * and a live 2.0.0 lifecycle export (agent actor).
  */
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const EXPORT_DIR = join(HERE, '..', '..', 'testdata', 'conformance', 'export');
-const LIVE_DIR = join(HERE, 'fixtures', 'live-1.8.0');
+const LIVE_DIR = join(HERE, 'fixtures', 'live-2.0.0');
 
 function loadCorpus(): RecordAuditExportInput {
   return JSON.parse(readFileSync(join(EXPORT_DIR, 'valid.json'), 'utf8')) as RecordAuditExportInput;

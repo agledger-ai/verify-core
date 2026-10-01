@@ -12,20 +12,23 @@ import { AGENT_SIGNATURE_CONTEXT, ed25519JwkThumbprint, sha256Hex } from '../pri
 import type { AgentPublicKeyJwk } from '../primitives.js';
 
 /**
- * Offline agent-signature re-check, and the 1.8.0 chain content it runs on.
+ * Offline agent-signature re-check, and the chain content it runs on.
  *
- * The fixtures under fixtures/live-1.8.0/ are unmodified `/audit-export`
- * responses from a live API 1.8.0 instance: a record walked through its whole
- * lifecycle on an API key (entries carry the internal `state` /
- * `previousState` / `newState` beside the display status), the same walk on an
- * ephemeral cert with every write agent-signed, and a bound and an unbound
- * delegated create. `agent-cert-key.json` is the Ed25519 JWK the agent sent at
- * cert exchange. The synthetic cases below cover what a live engine will not
+ * The fixtures under fixtures/live-2.0.0/ are unmodified `/audit-export`
+ * responses from a scratch API 2.0.0 instance: a record walked through its
+ * whole lifecycle on an API key (entries carry the internal `state` /
+ * `previousState` / `newState` beside the display status), the same walk by an
+ * agent on an ephemeral cert that signed every request body, a bound and an
+ * unbound delegated create, and a delegation chain: a root the cert agent
+ * opened naming a second cert agent as performer, and the child that agent
+ * delegated under it. `agent-cert-key.json` is the Ed25519 JWK the first agent
+ * sent at cert exchange; the second agent's key was not kept. The synthetic
+ * cases below cover what a live engine will not
  * produce: a sealed agent signature that does not verify.
  */
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const LIVE = join(HERE, 'fixtures', 'live-1.8.0');
+const LIVE = join(HERE, 'fixtures', 'live-2.0.0');
 
 function loadExport(name: string): RecordAuditExportInput {
   return JSON.parse(readFileSync(join(LIVE, name), 'utf8')) as RecordAuditExportInput;
@@ -42,7 +45,7 @@ function jwkOf(key: KeyObject): AgentPublicKeyJwk {
   return { kty: 'OKP', crv: 'Ed25519', x };
 }
 
-describe('1.8.0 chain content verifies', () => {
+describe('live chain content verifies', () => {
   it('a lifecycle signed in both state vocabularies verifies, with the binding check applied', () => {
     const doc = loadExport('export-lifecycle.json');
     // The fixture must actually carry the new keys, or this proves nothing.
@@ -110,6 +113,28 @@ describe('agent signature re-check on live exports', () => {
     });
     expect(result.valid).toBe(true);
     expect(result.agentSignatures).toEqual({ present: 0, verified: 0 });
+    expect(result.optionalChecks.agent_signature).toBe('skipped_no_input');
+  });
+
+  it('a delegation root opened on the cert carries its signature, and it verifies', () => {
+    const doc = loadExport('export-delegation-parent.json');
+    expect(doc.entries[0]!.entryType).toBe('RECORD_CREATED');
+    const result = verifyAuditExport(doc, { agentKeys: [agentCert.publicKeyJwk] });
+    expect(result.valid).toBe(true);
+    expect(result.agentSignatures).toEqual({ present: 1, verified: 1 });
+  });
+
+  it('a child delegated by a second cert agent verifies, and the first agent key does not vouch for it', () => {
+    const parent = loadExport('export-delegation-parent.json');
+    const doc = loadExport('export-delegation-child.json');
+    const created = doc.entries[0]!;
+    expect(created.entryType).toBe('RECORD_DELEGATED');
+    expect((created.payload as Record<string, unknown>)['parentRecordId']).toBe(parent.recordId);
+    expect(created.actorOwnerId).not.toBe(parent.entries[0]!.actorOwnerId);
+
+    const result = verifyAuditExport(doc, { agentKeys: [agentCert.publicKeyJwk] });
+    expect(result.valid).toBe(true);
+    expect(result.agentSignatures).toEqual({ present: 1, verified: 0 });
     expect(result.optionalChecks.agent_signature).toBe('skipped_no_input');
   });
 
