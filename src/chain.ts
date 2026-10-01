@@ -105,7 +105,8 @@ export interface VerificationKey {
   /**
    * The key-statement walk's verdict on this key, set by `applyKeyTrust`.
    * Absent when no walk ran (no `trustAnchors`), and the result then reports
-   * `optionalChecks.key_anchoring: skipped_no_input`.
+   * `optionalChecks.key_anchoring: skipped_no_input`; with a walk and no
+   * entry reaching the check, `not_checked`.
    */
   trust?: KeyTrustState;
 }
@@ -214,7 +215,13 @@ export type OptionalCheck =
   | 'key_temporal'
   | 'agent_signature'
   | 'key_anchoring';
-export type CheckApplicability = 'applied' | 'skipped_no_input';
+/**
+ * `applied`: the check ran. `skipped_no_input`: the input it needs is absent.
+ * `not_checked`: the input was given but no entry reached the check, because
+ * the chain broke before it or no entry was signed. Only `key_anchoring` has
+ * a caller-level input and so can be `not_checked`.
+ */
+export type CheckApplicability = 'applied' | 'skipped_no_input' | 'not_checked';
 
 export interface SignatureOutcome {
   /**
@@ -479,6 +486,12 @@ export function verifyChain(
     }
 
     previousHash = entry.payloadHash;
+  }
+
+  // The caller walked the key statements (every key carries a verdict), but no
+  // entry got as far as the anchoring check.
+  if (optionalChecks.key_anchoring === 'skipped_no_input' && [...keys.values()].some((k) => k.trust !== undefined)) {
+    optionalChecks.key_anchoring = 'not_checked';
   }
 
   return {

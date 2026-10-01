@@ -37,6 +37,7 @@ import {
   computeKeyTrust,
   keyStatementsFromExport,
   reportKeyTrust,
+  settleKeyTrust,
   type DistrustedKey,
   type KeyStatementInput,
   type KeyTrustReport,
@@ -250,8 +251,10 @@ export interface VerifyExportResult {
   keyProvenance: { supplied: number; embedded: number };
   /**
    * Whether the keys were anchored, and to what. `status: 'no_anchor'` means
-   * no `trustAnchors` were given: the verdict then rests on keys nobody
-   * pinned, which is not a clean verdict whatever `valid` says. Findings on
+   * no `trustAnchors` were given, and `status: 'no_anchored_signature'` that
+   * they were but no entry verified under a key they anchor: either way the
+   * verdict rests on nothing pinned, which is not a trusted verdict whatever
+   * `valid` says (see `KeyTrustStatus`). Findings on
    * the key statements themselves (KEY_STATEMENT_INVALID, KEY_CLOSURE_INVALID,
    * CHAIN_KEY_WINDOW_DRIFT) are listed here and make `valid` false.
    */
@@ -347,7 +350,7 @@ export function verifyAuditExport(
     .map(([, window]) => window);
   const signedActivations = trust === null ? [] : [...trust.byDigest.values()].filter((k) => k.trusted);
   const signingSince = earliestKeyActivation([...resolvedKeys, ...windowOnly, ...signedActivations]);
-  const keyTrust = reportKeyTrust(keys, trust, meta.anchoredFrom ?? null);
+  const walkReport = reportKeyTrust(keys, trust, meta.anchoredFrom ?? null);
   const normalized: NormalizedEntry[] = entries.map((raw) => {
     // An entry or integrity block that is not an object carries none of the
     // fields the walk reads, and fails CHAIN_MALFORMED_ENTRY there.
@@ -410,6 +413,12 @@ export function verifyAuditExport(
     agentKeys,
     signingSince,
   });
+  // Under a walk every key a signature verifies against is anchored, so the
+  // signed entries are the anchored signatures.
+  const keyTrust = settleKeyTrust(walkReport, chain.signatureCoverage.signed);
+  if (trust !== null && chain.optionalChecks.key_anchoring === 'skipped_no_input') {
+    chain.optionalChecks.key_anchoring = 'not_checked';
+  }
   // A finding on the key statements has no chain position; it is reported
   // at position 0, the place for findings that precede the walk.
   const registryFinding = keyTrust.findings[0];
