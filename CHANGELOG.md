@@ -32,6 +32,7 @@ This release targets AGLedger API 2.0 and reads nothing older. 1.6.0 was never p
 - **An all-zero signature on an entry that names a key fails `CHAIN_SIGNATURE_INVALID`.** Without a key policy it was graded `unsigned` and passed, and under `requireKeyId` / `requireSuppliedKeys` it failed `CHAIN_KEY_POLICY_VIOLATION`. The engine writes a key id only beside a signature it made with that key and fails this shape as an invalid signature; the verifier now agrees, with or without a policy. `verifyChain` no longer produces the `unsigned` signature state; the member stays in the type.
 
 - `verifyRfc9162Inclusion` returns false for a `leafIndex` or `treeSize` that is not a safe integer (NaN used to verify a proof as if it were leaf 0), and walks a tree past 2^32 leaves rather than wrapping its index.
+- `exportMetadata.signingKeyStatements` given as an array is refused with the `TypeError` any other malformed statement map gets (`signingKeyStatements must be an object keyed by key id.`). An array passed the object check, so its statements were read by index and filed under key ids `"0"`, `"1"`, and so on.
 
 ### Changed
 

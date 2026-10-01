@@ -982,7 +982,9 @@ export function keyStatementsFromExport(
   signingKeyStatements: Readonly<Record<string, readonly PublishedKeyStatement[]>> | undefined | null,
 ): KeyStatementInput[] {
   if (signingKeyStatements === undefined || signingKeyStatements === null) return [];
-  if (typeof signingKeyStatements !== 'object') throw new TypeError('signingKeyStatements must be an object keyed by key id.');
+  if (typeof signingKeyStatements !== 'object' || Array.isArray(signingKeyStatements)) {
+    throw new TypeError('signingKeyStatements must be an object keyed by key id.');
+  }
   return statementsFromMap(Object.entries(signingKeyStatements), 'signingKeyStatements');
 }
 
