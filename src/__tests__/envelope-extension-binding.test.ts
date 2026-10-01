@@ -9,10 +9,10 @@ import type { RecordAuditExportInput } from '../audit-export.js';
  * A row copy of `on_behalf_of` / `traceparent` in an export entry's `payload`
  * is what a reader sees, and the predicate comparison strips both sides of it,
  * so a copy that is present is bound to the signed predicate separately. Fixtures are
- * unmodified live 1.8.0 exports (see agent-signature.test.ts).
+ * unmodified live 2.0.0 exports (see agent-signature.test.ts).
  */
 
-const LIVE = join(dirname(fileURLToPath(import.meta.url)), 'fixtures', 'live-1.8.0');
+const LIVE = join(dirname(fileURLToPath(import.meta.url)), 'fixtures', 'live-2.0.0');
 
 type Entry = { payload?: Record<string, unknown> };
 
@@ -27,7 +27,13 @@ function firstWithObo(doc: RecordAuditExportInput): Entry & { payload: Record<st
 }
 
 describe('envelope extensions in the row payload are bound to the signed predicate', () => {
-  for (const name of ['export-cert-lifecycle.json', 'export-delegated-bound.json', 'export-delegated-unbound.json']) {
+  for (const name of [
+    'export-cert-lifecycle.json',
+    'export-delegated-bound.json',
+    'export-delegated-unbound.json',
+    'export-delegation-parent.json',
+    'export-delegation-child.json',
+  ]) {
     it(`${name} verifies untouched`, () => {
       expect(verifyAuditExport(load(name)).valid).toBe(true);
     });
