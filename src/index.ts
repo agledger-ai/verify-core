@@ -50,6 +50,7 @@ export {
   parseDistrustedKeys,
   parseTrustAnchors,
   reportKeyTrust,
+  settleKeyTrust,
   spkiSha256,
   trustKeyFromDumpRow,
 } from './key-statements.js';
@@ -65,6 +66,7 @@ export type {
   KeyTrust,
   KeyTrustEntry,
   KeyTrustReport,
+  KeyTrustStatus,
   PublishedKeyStatement,
   TrustKeyInput,
   VerificationKeysDocument,

@@ -43,7 +43,7 @@ if (!result.valid) {
   console.error(`Broken at position ${result.brokenAt?.position}: ${result.brokenAt?.code}`);
   process.exit(1);
 }
-console.log(result.keyTrust.status); // 'walked'; 'no_anchor' when no trustAnchors were given
+console.log(result.keyTrust.status); // 'walked', 'no_anchor' or 'no_anchored_signature'
 // { valid: true, verifiedEntries, totalEntries, keyTrust, keyProvenance: { supplied, embedded }, ... }
 ```
 
@@ -109,10 +109,22 @@ verifier walks the statements from it:
 
 An entry signed by a key the walk does not anchor fails
 `CHAIN_SIGNING_KEY_UNANCHORED`, and each anchored key is held to the window its
-statements sign. Without `trustAnchors` (an empty array is the same as
-none), `keyTrust.status` is `no_anchor`,
-`optionalChecks.key_anchoring` is `skipped_no_input`, and the verdict rests on
-keys nobody pinned: a key written into the database alone would pass.
+statements sign. `keyTrust.status` says whether a pass can be trusted:
+
+- `walked`: at least one entry verified under a key your anchors reach. The
+  only status a passing result is trusted on.
+- `no_anchor`: no `trustAnchors` (an empty array is the same as none), so
+  `optionalChecks.key_anchoring` is `skipped_no_input` and the verdict rests on
+  keys nobody pinned: a key written into the database alone would pass.
+- `no_anchored_signature`: the walk ran, but no entry verified under a key it
+  anchors, so `optionalChecks.key_anchoring` is `not_checked`. An export of
+  entries written before the install began signing passes under any pin, and
+  proves nothing about the pin.
+
+A pass on `no_anchor` or `no_anchored_signature` is not a trusted verdict; the
+`detail` says so, and every AGLedger surface reports it as `unanchored`.
+`distrustedKeys` without `trustAnchors` throws `TypeError`, since nothing would
+apply them.
 
 ```ts
 import { verifyAuditExport } from '@agledger/verify-core';
@@ -190,6 +202,14 @@ const registry = applyKeyTrust(
 );
 console.log([...registry.values()].map((k) => `${k.keyId} ${k.trust}`), trust.findings);
 ```
+
+A dump verifier reports the walk with `reportKeyTrust(registry, trust, null)`
+and, once its chains are walked, settles it with
+`settleKeyTrust(report, signedEntries)`, the count of entries whose signature
+verified: with none, the status becomes `no_anchored_signature`.
+`writtenWhileSigning(rowTime, signingSince)` is the unsigned-row rule for
+checkpoints and read-log rows, and fails closed on a row with no readable time
+once signing began.
 
 `keyStatementsFromVerificationKeys(document)` gives the same inputs from a
 `GET /v1/verification-keys` response. A key reached only through a statement

@@ -1073,15 +1073,29 @@ export function applyKeyTrust(registry: KeyRegistry, trust: KeyTrust): KeyRegist
   return out;
 }
 
+/**
+ * Whether a verification can be read as trusted.
+ *
+ * - `walked`: the key statements were walked from the caller's anchors and at
+ *   least one signature verified under a key they anchor. The one status a
+ *   passing result is trusted on.
+ * - `no_anchor`: no `trustAnchors` were given, so no key was anchored and
+ *   every key was taken on the word of whoever embedded or supplied it. A
+ *   pass is not a trusted verdict.
+ * - `no_anchored_signature`: the walk ran, but no signature in the artifact
+ *   verified under a key it anchors (every entry is unsigned history, or the
+ *   chain broke first). An unsigned entry proves nothing about who wrote it,
+ *   so a pass is not a trusted verdict either.
+ *
+ * Every surface reads `no_anchor` and `no_anchored_signature` alike: a pass
+ * on either is `unanchored`, never `trusted`.
+ */
+export type KeyTrustStatus = 'walked' | 'no_anchor' | 'no_anchored_signature';
+
 /** What a verification result says about key anchoring. */
 export interface KeyTrustReport {
-  /**
-   * `walked`: the key statements were walked from the caller's anchors.
-   * `no_anchor`: no `trustAnchors` were given, so no key was anchored and
-   * every key was taken on the word of whoever embedded or supplied it. Not
-   * a clean verdict, whatever the chain checks say.
-   */
-  status: 'walked' | 'no_anchor';
+  /** See {@link KeyTrustStatus}. */
+  status: KeyTrustStatus;
   detail: string;
   /** The anchors walked from, as `sha256:<hex>`. */
   anchors: string[];
@@ -1097,14 +1111,19 @@ export interface KeyTrustReport {
   findings: KeyRegistryFinding[];
 }
 
-/** Summarize a registry after `applyKeyTrust` (or with `trust` null when no walk ran). */
+/**
+ * Summarize a registry after `applyKeyTrust` (or with `trust` null when no
+ * walk ran). A walked report says `walked` until the caller settles it with
+ * {@link settleKeyTrust}, once it knows whether any signature verified under
+ * an anchored key. `anchoredFrom` that is not a string is read as absent.
+ */
 export function reportKeyTrust(registry: KeyRegistry, trust: KeyTrust | null, anchoredFrom: string | null): KeyTrustReport {
   const ids = (state: KeyTrustState) => [...registry.values()].filter((k) => k.trust === state).map((k) => k.keyId).sort();
   if (typeof anchoredFrom !== 'string') anchoredFrom = null;
   if (trust === null) {
     return {
       status: 'no_anchor',
-      detail: 'No trustAnchors were given, so no key was anchored: every key was taken on the word of whoever embedded or supplied it, and a key written into the Server\'s database alone would verify. Pin the SPKI digest of a vault key you hold or took out of band (sha256:<hex>) as trustAnchors.',
+      detail: 'No trustAnchors were given, so no key was anchored and this is not a trusted verdict: every key was taken on the word of whoever embedded or supplied it, and a key written into the Server\'s database alone would verify. Pin the SPKI digest of a vault key you hold or took out of band (sha256:<hex>) as trustAnchors.',
       anchors: [],
       anchoredFrom,
       anchoredFromPinned: null,
@@ -1129,5 +1148,22 @@ export function reportKeyTrust(registry: KeyRegistry, trust: KeyTrust | null, an
     unanchoredKeyIds: unanchored,
     undecidedKeyIds: ids('undecided'),
     findings: trust.findings,
+  };
+}
+
+/**
+ * Settle a walked report once the caller has counted the signatures that
+ * verified under an anchored key (an export's or a dump's entries whose
+ * signature checked out, since under a walk every such key is anchored).
+ * With none, the report becomes `no_anchored_signature`: the pin was walked,
+ * but nothing in the artifact is signed by a key it anchors, so a pass is not
+ * a trusted verdict. Any other report is returned as it is.
+ */
+export function settleKeyTrust(report: KeyTrustReport, anchoredSignatures: number): KeyTrustReport {
+  if (report.status !== 'walked' || anchoredSignatures > 0) return report;
+  return {
+    ...report,
+    status: 'no_anchored_signature',
+    detail: `The key statements were walked from ${report.anchors.join(', ')}, but no signature here verified under a key they anchor, so this is not a trusted verdict: an entry written before the install began signing carries no signature, and proves nothing about who wrote it.`,
   };
 }
