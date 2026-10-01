@@ -117,6 +117,20 @@ describe('verifyAuditExport with trustAnchors', () => {
     expect(() => verifyAuditExport(load('valid.json'), { trustAnchors: [STRANGER], distrustedKeys: ['sha256:xyz'] })).toThrow(TypeError);
   });
 
+  it('refuses signingKeyStatements that is not an object keyed by key id, rather than reading a list by index', () => {
+    const exp = load('valid.json');
+    const keyId = exp.entries[0]!.integrity.signingKeyId!;
+    const asList = [exp.exportMetadata.signingKeyStatements![keyId]!];
+    (exp.exportMetadata as Record<string, unknown>)['signingKeyStatements'] = asList;
+    expect(() => verifyAuditExport(exp, { trustAnchors: [pinOf(load('valid.json'))] })).toThrow(
+      new TypeError('signingKeyStatements must be an object keyed by key id.'),
+    );
+    (exp.exportMetadata as Record<string, unknown>)['signingKeyStatements'] = 'statements';
+    expect(() => verifyAuditExport(exp, { trustAnchors: [pinOf(load('valid.json'))] })).toThrow(
+      new TypeError('signingKeyStatements must be an object keyed by key id.'),
+    );
+  });
+
   it('an empty trustAnchors is the same as none', () => {
     const exp = load('key-substitution.json');
     const r = verifyAuditExport(exp, { trustAnchors: [] });
