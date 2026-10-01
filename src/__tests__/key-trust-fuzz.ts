@@ -188,5 +188,12 @@ export function verdictOf(t: {
 }
 
 export function portVerdict(trust: KeyTrust): Verdict {
-  return verdictOf({ trusted: trust.trusted, windowOf: (d) => trust.byDigest.get(d), findings: trust.findings });
+  // The engine folds a distrust cutoff into the window's upper edge; the port
+  // carries it apart from the signed retirement, so compare the edge entries
+  // are graded against.
+  const windowOf = (d: string) => {
+    const e = trust.byDigest.get(d);
+    return e && { activatedAt: e.activatedAt, retiredAt: e.distrustCutoff ?? e.retiredAt };
+  };
+  return verdictOf({ trusted: trust.trusted, windowOf, findings: trust.findings });
 }

@@ -31,7 +31,8 @@
  *                                a retired/wrong-key policy hit is alertable apart
  *                                from a benign missing key.
  *   - CHAIN_KEY_EXPIRED (new)  temporal key-validity: entry written after the
- *                                signing key's retired_at.
+ *                                signing key's retired_at, or after its
+ *                                distrustedKeys cutoff.
  *   - CHAIN_KEY_NOT_YET_ACTIVE  entry written before the key's activated_at.
  *                                Split from CHAIN_KEY_EXPIRED so a consumer is
  *                                not told "expired" about a key that had not
@@ -169,7 +170,7 @@ const SUGGESTIONS: Record<FailureCode, string> = {
   CHAIN_KEY_POLICY_VIOLATION:
     'The entry\'s signing key violates the caller\'s key policy (requireKeyId, or requireSuppliedKeys refusing a key the artifact embeds). Re-run with the expected key id, or supply the keys yourself. Where a key came from does not make it trusted: pin a trust anchor (trustAnchors) for that.',
   CHAIN_KEY_EXPIRED:
-    'The entry was written AFTER its signing key was retired. Possible use of a compromised retired key: check the key rotation and retention record for that key id.',
+    'The entry was written AFTER its signing key was retired, or after the instant distrustedKeys (VAULT_DISTRUSTED_KEYS on the Server) gives for that key; the detail says which. Possible use of a compromised key: check the key rotation and retention record for that key id.',
   CHAIN_KEY_NOT_YET_ACTIVE:
     'The entry was written BEFORE its signing key was activated. Not a rotation problem: the usual causes are a backdated entry or clock skew between the signer and the key registry. Compare the entry write time against the key activation time before treating this as tamper.',
   CHAIN_ALG_MISMATCH:

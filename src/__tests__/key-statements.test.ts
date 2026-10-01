@@ -464,7 +464,11 @@ describe('distrusted keys (the Server\'s VAULT_DISTRUSTED_KEYS)', () => {
     ];
     const cut = walk([row(n, T0)], statements, [c.digest], [{ spkiSha256: n.digest, cutoff: T1 }]);
     expect(anchoredKids(cut)).toEqual([c.kid, n.kid].sort());
-    expect(cut.byDigest.get(n.digest)).toMatchObject({ activatedAt: T0, retiredAt: T1 });
+    // The cutoff ends the window without retiring the key.
+    expect(cut.byDigest.get(n.digest)).toMatchObject({ activatedAt: T0, retiredAt: null, distrustCutoff: T1 });
+    const applied = applyKeyTrust(buildKeyRegistry([{ keyId: n.kid, spkiBase64: n.publicKey, source: 'embedded' }]), cut).get(n.kid)!;
+    expect(applied).toMatchObject({ trust: 'anchored', activatedAt: T0, distrustCutoff: T1 });
+    expect(applied.retiredAt).toBeUndefined();
     expect(codes(cut)).toEqual([['KEY_STATEMENT_INVALID', succM.id]]);
     expect(anchoredKids(walk([], statements, [c.digest], [{ spkiSha256: n.digest, cutoff: null }]))).toEqual([c.kid]);
   });
@@ -491,7 +495,7 @@ describe('distrusted keys (the Server\'s VAULT_DISTRUSTED_KEYS)', () => {
     expect(onlyA.findings).toContainEqual(expect.objectContaining({ code: 'KEY_CLOSURE_INVALID', detail: expect.stringContaining(`add sha256:${p.digest} to distrustedKeys too`) }));
     const both = walk([], statements, [b.digest], [{ spkiSha256: a.digest, cutoff: LEAK }, { spkiSha256: p.digest, cutoff: LEAK }]);
     expect(both.trusted.has(q.digest)).toBe(false);
-    expect(both.byDigest.get(p.digest)!.retiredAt).toBe(LEAK);
+    expect(both.byDigest.get(p.digest)).toMatchObject({ retiredAt: null, distrustCutoff: LEAK });
   });
 
   it('does not blame an honest closure when its subject\'s leaked half redates it later', () => {
@@ -928,7 +932,9 @@ describe('the trust walk on random registries', () => {
       const a = attacked.byDigest.get(d)!;
       const b = base.byDigest.get(d)!;
       if (b.activatedAt !== null && (a.activatedAt === null || a.activatedAt < b.activatedAt)) out.push(`${tag}: ${d.slice(0, 8)} activates at ${a.activatedAt}, before ${b.activatedAt}`);
-      if (b.retiredAt !== null && (a.retiredAt === null || a.retiredAt > b.retiredAt)) out.push(`${tag}: ${d.slice(0, 8)} retires at ${a.retiredAt}, past ${b.retiredAt}`);
+      const aEnds = a.distrustCutoff ?? a.retiredAt;
+      const bEnds = b.distrustCutoff ?? b.retiredAt;
+      if (bEnds !== null && (aEnds === null || aEnds > bEnds)) out.push(`${tag}: ${d.slice(0, 8)} retires at ${aEnds}, past ${bEnds}`);
     }
     return out;
   }

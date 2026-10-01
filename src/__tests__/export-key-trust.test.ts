@@ -112,6 +112,22 @@ describe('verifyAuditExport with trustAnchors', () => {
     expect(r.brokenAt?.code).toBe('CHAIN_SIGNING_KEY_UNANCHORED');
   });
 
+  it('a key distrusted from an instant and never retired fails what it wrote after, worded as the distrust cutoff', () => {
+    const exp = load('valid.json');
+    const cutoff = '2026-09-30T22:06:08.770000Z';
+    const r = verifyAuditExport(exp, { trustAnchors: [pinOf(exp)], distrustedKeys: [`${pinOf(exp)}@${cutoff}`] });
+    const keyId = exp.entries[1]!.integrity.signingKeyId!;
+    expect(r.entries[0]!.valid).toBe(true);
+    expect(r.brokenAt).toMatchObject({
+      position: 2,
+      code: 'CHAIN_KEY_EXPIRED',
+      detail: `Entry written ${exp.entries[1]!.createdAt} postdates ${cutoff}, the instant distrustedKeys (VAULT_DISTRUSTED_KEYS on the Server) gives for key ${keyId}; the key was not retired then.`,
+    });
+    expect(r.brokenAt!.detail).not.toMatch(/retirement/);
+    // Not a retirement, so the active registry column is no drift.
+    expect(r.keyTrust.findings).toEqual([]);
+  });
+
   it('refuses a malformed anchor or distrusted key by name', () => {
     expect(() => verifyAuditExport(load('valid.json'), { trustAnchors: ['15d63684b387235c'] })).toThrow(/15d63684b387235c/);
     expect(() => verifyAuditExport(load('valid.json'), { trustAnchors: [STRANGER], distrustedKeys: ['sha256:xyz'] })).toThrow(TypeError);
