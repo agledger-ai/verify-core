@@ -36,6 +36,7 @@ import {
   applyKeyTrust,
   computeKeyTrust,
   keyStatementsFromExport,
+  statementsFromMap,
   reportKeyTrust,
   settleKeyTrust,
   type DistrustedKey,
@@ -472,17 +473,32 @@ function trustKeysOf(exportData: RecordAuditExportInput, options: VerifyExportOp
   return out;
 }
 
-/** The export's key statements, plus any a supplied key carries (a /v1/verification-keys `data[]`). */
+/**
+ * The export's key statements, plus any a supplied key carries (a
+ * /v1/verification-keys `data[]`). A statement both carry is one row, which
+ * the walk reads once by its id and write time. When one source publishes
+ * write order and the other does not (an export and a key document from
+ * Servers on either side of that change), a statement without a write time
+ * that the other source carries with one is dropped as the same row; if any
+ * other remains, the walk falls back to the signed order for all of them,
+ * which `keyTrust.order` reports.
+ */
 function trustStatementsOf(exportData: RecordAuditExportInput, options: VerifyExportOptions): KeyStatementInput[] {
-  const out = keyStatementsFromExport(exportData.exportMetadata.signingKeyStatements);
-  if (Array.isArray(options.publicKeys)) {
-    const byKey: Record<string, PublishedKeyStatement[]> = {};
-    for (const k of options.publicKeys as ReadonlyArray<SuppliedKeyEntry>) {
-      if (k !== null && typeof k === 'object' && Array.isArray(k.statements)) byKey[k.keyId] = [...(byKey[k.keyId] ?? []), ...k.statements];
-    }
-    out.push(...keyStatementsFromExport(byKey).map((s) => ({ ...s, id: `supplied:${s.id ?? ''}` })));
+  const own = keyStatementsFromExport(exportData.exportMetadata.signingKeyStatements);
+  if (!Array.isArray(options.publicKeys)) return own;
+  const byKey: Record<string, PublishedKeyStatement[]> = {};
+  for (const k of options.publicKeys as ReadonlyArray<SuppliedKeyEntry>) {
+    if (k !== null && typeof k === 'object' && Array.isArray(k.statements)) byKey[k.keyId] = [...(byKey[k.keyId] ?? []), ...k.statements];
   }
-  return out;
+  const supplied = statementsFromMap(Object.entries(byKey), 'signingKeyStatements', 'supplied:');
+  const all = [...own, ...supplied];
+  const timed = all.filter((s) => s.createdAt !== undefined);
+  if (timed.length === 0 || timed.length === all.length) return all;
+  const bytesOf = (s: KeyStatementInput) => s.cose.map((c) => (typeof c === 'string' ? c : Buffer.from(c).toString('base64'))).join('|');
+  const timedBytes = new Set(timed.map(bytesOf));
+  const rest = all.filter((s) => s.createdAt !== undefined || !timedBytes.has(bytesOf(s)));
+  if (rest.every((s) => s.createdAt !== undefined)) return rest;
+  return all.map(({ createdAt: _c, ...s }) => s);
 }
 
 function earlyFailure(recordId: string, totalEntries: number, detail: string): VerifyExportResult {

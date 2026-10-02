@@ -5,12 +5,14 @@ import { buildKeyRegistry, type KeyRegistry } from '../chain.js';
 import {
   applyKeyTrust,
   computeKeyTrust,
+  keyStatementsFromVerificationKeys,
   parseDistrustedKeys,
   parseTrustAnchors,
   type DistrustedKey,
   type KeyStatementInput,
   type KeyTrust,
   type TrustKeyInput,
+  type VerificationKeysDocument,
 } from '../key-statements.js';
 import {
   T0, T1, T2, T3,
@@ -601,7 +603,7 @@ describe('a statement row that holds no signature', () => {
   });
 });
 
-describe('a walk over a key document (no write order)', () => {
+describe('a walk over an older key document (no write order)', () => {
   it('orders by the instants the statements sign, and agrees with the dump on an honest rotation from either pin', () => {
     const c = makeKey();
     const n = makeKey();
@@ -680,6 +682,141 @@ describe('a walk over a key document (no write order)', () => {
     const forced = statement('closure', c, { endorser: n, signers: [n], retiredAt: T2, forced: true });
     const trust = walk([], asDocument([genesis, succ, backdated, forced]), [n.digest]);
     expect(trust.trusted.has(x.digest)).toBe(false);
+  });
+});
+
+/**
+ * A key document as a Server that publishes write order lists it: each key
+ * with the statements filed under it, each statement with its row id and its
+ * write time at microseconds. `at` gives each statement's write time.
+ */
+function publish(
+  keys: Array<{ key: TestKey; activatedAt: string; retiredAt?: string | null; statements: Stored[] }>,
+  at: ReadonlyMap<Stored, string>,
+): VerificationKeysDocument {
+  return {
+    data: keys.map((k) => ({
+      keyId: k.key.kid,
+      publicKey: k.key.publicKey,
+      algorithm: k.key.alg,
+      status: k.retiredAt ? 'retired' : 'active',
+      activatedAt: `${k.activatedAt.slice(0, 23)}Z`,
+      retiredAt: k.retiredAt ? `${k.retiredAt.slice(0, 23)}Z` : null,
+      statements: k.statements.map((st) => ({
+        id: st.id,
+        kind: st.kind,
+        createdAt: at.get(st) ?? T1,
+        cose: st.cose.map((b) => Buffer.from(b as Uint8Array).toString('base64')),
+      })),
+    })),
+  };
+}
+
+function walkDocument(doc: VerificationKeysDocument, anchors: readonly TestKey[]): KeyTrust {
+  return computeKeyTrust({ ...keyStatementsFromVerificationKeys(doc), trustAnchors: anchors.map((k) => `sha256:${k.digest}`) });
+}
+
+describe('a walk over a key document that publishes write order', () => {
+  it('reads each statement\'s id and createdAt, so the walk applies the write order and names the row in findings', () => {
+    const c = makeKey();
+    const g = statement('genesis', c, { signers: [c], activatedAt: T0 });
+    const planted = statement('genesis', makeKey(), { signers: [makeKey()] });
+    const doc = publish([{ key: c, activatedAt: T0, statements: [g, planted] }], new Map([[g, T0], [planted, T1]]));
+    const { statements } = keyStatementsFromVerificationKeys(doc);
+    expect(statements.map((st) => [st.id, st.createdAt])).toEqual([[g.id, T0], [planted.id, T1]]);
+    const trust = walkDocument(doc, [c]);
+    expect(trust.order).toBe('written');
+    expect(trust.findings.map((f) => [f.code, f.statementId])).toEqual([['KEY_STATEMENT_INVALID', planted.id]]);
+  });
+
+  it('a later admission a trusted key publishes dates its window and cuts its edge back, as the engine walks the whole registry', () => {
+    const c = makeKey();
+    const n = makeKey();
+    const genesis = statement('genesis', c, { signers: [c], activatedAt: T0 });
+    const succ = statement('succession', n, { endorser: c, signers: [c, n], activatedAt: T1 });
+    const later = statement('genesis', n, { signers: [n], activatedAt: T2 });
+    const at = new Map([[genesis, T0], [succ, T1], [later, T2]]);
+    // The engine files the later genesis under n: from n alone the edge back
+    // to c is cut, and n's window opens at T2.
+    const doc = publish([{ key: n, activatedAt: T2, statements: [succ, later] }, { key: c, activatedAt: T0, statements: [genesis] }], at);
+    const fromN = walkDocument(doc, [n]);
+    expect(anchoredKids(fromN)).toEqual([n.kid]);
+    expect(fromN.byDigest.get(n.digest)!.activatedAt).toBe(T2);
+    // c's genesis now touches no anchored key, as on the whole registry.
+    expect(fromN.findings.map((f) => [f.code, f.statementId])).toEqual([['KEY_STATEMENT_INVALID', genesis.id], ['KEY_STATEMENT_INVALID', later.id]]);
+    const fromC = walkDocument(doc, [c]);
+    expect(anchoredKids(fromC)).toEqual([c.kid, n.kid].sort());
+    expect(fromC.byDigest.get(n.digest)!.activatedAt).toBe(T2);
+    // A document carrying only n's first admission dates it at T1 and takes
+    // the edge back the engine refuses; the listed activatedAt reads as drift.
+    const firstOnly = publish([{ key: n, activatedAt: T2, statements: [succ] }, { key: c, activatedAt: T0, statements: [genesis] }], at);
+    const old = walkDocument(firstOnly, [n]);
+    expect(anchoredKids(old)).toEqual([c.kid, n.kid].sort());
+    expect(old.findings.map((f) => f.code)).toEqual(['CHAIN_KEY_WINDOW_DRIFT']);
+  });
+
+  it('orders two statements stored in the same microsecond by id, whatever order the document lists them in', () => {
+    const c = makeKey();
+    const n = makeKey();
+    const x = makeKey();
+    const genesis = statement('genesis', c, { signers: [c], activatedAt: T0 });
+    const succ = statement('succession', n, { endorser: c, signers: [c, n], activatedAt: T1 });
+    const closure = statement('closure', c, { endorser: n, signers: [n], retiredAt: T2 });
+    const edge = statement('succession', x, { endorser: c, signers: [c, x], activatedAt: T2 });
+    const same = '2026-09-03T00:00:00.000007Z';
+    const at = new Map([[genesis, T0], [succ, T1], [closure, same], [edge, same]]);
+    for (const [first, second, trustsX] of [['00000000-0000-4000-8000-00000000000a', '00000000-0000-4000-8000-00000000000b', true], ['00000000-0000-4000-8000-00000000000b', '00000000-0000-4000-8000-00000000000a', false]] as const) {
+      // The edge out of c is void only when it sorts after c's closure.
+      const e = { ...edge, id: first };
+      const cl = { ...closure, id: second };
+      const keys = [{ key: c, activatedAt: T0, retiredAt: T2, statements: [genesis, cl] }, { key: n, activatedAt: T1, statements: [succ] }, { key: x, activatedAt: T2, statements: [e] }];
+      for (const listing of [keys, [...keys].reverse()]) {
+        const trust = walkDocument(publish(listing, new Map([...at, [e, same], [cl, same]])), [n]);
+        expect(trust.trusted.has(x.digest)).toBe(trustsX);
+      }
+    }
+  });
+
+  it('a statement the document lists without createdAt is a finding, not a document read in the signed order', () => {
+    const c = makeKey();
+    const n = makeKey();
+    const genesis = statement('genesis', c, { signers: [c], activatedAt: T0 });
+    const succ = statement('succession', n, { endorser: c, signers: [c, n], activatedAt: T1 });
+    const doc = publish([{ key: n, activatedAt: T1, statements: [succ] }, { key: c, activatedAt: T0, statements: [genesis] }], new Map([[genesis, T0], [succ, T1]]));
+    delete (doc.data[0]!.statements![0] as { createdAt?: string }).createdAt;
+    const trust = walkDocument(doc, [c]);
+    expect(trust.order).toBe('written');
+    expect(anchoredKids(trust)).toEqual([c.kid]);
+    expect(trust.findings).toContainEqual(expect.objectContaining({ code: 'KEY_STATEMENT_INVALID', statementId: succ.id, detail: 'the row has no parseable created_at to order it by' }));
+  });
+
+  it('a row read from two sources is one statement, and a copy of it under another id is a second', () => {
+    const c = makeKey();
+    const n = makeKey();
+    const succ = statement('succession', n, { endorser: c, signers: [c, n], activatedAt: T1, createdAt: T1 });
+    const keys = [{ keyId: c.kid, publicKey: c.publicKey }];
+    const timed = { ...succ, createdAt: '2026-09-02T00:00:00.000123Z' };
+    expect(anchoredKids(walk(keys, [timed, { ...timed }], [n.digest]))).toEqual([c.kid, n.kid].sort());
+    expect(anchoredKids(walk(keys, [timed, { ...timed, id: nextId() }], [n.digest]))).toEqual([n.kid]);
+  });
+
+  it('a later succession whose endorser the document does not carry dates the window earlier than the engine, and the listed activatedAt says so', () => {
+    const c = makeKey();
+    const n = makeKey();
+    const unpublished = makeKey();
+    const genesis = statement('genesis', c, { signers: [c], activatedAt: T0 });
+    const succ = statement('succession', n, { endorser: c, signers: [c, n], activatedAt: T1 });
+    const later = statement('succession', n, { endorser: unpublished, signers: [unpublished, n], activatedAt: T2 });
+    const at = new Map([[genesis, T0], [succ, T1], [later, T2]]);
+    const doc = publish([{ key: n, activatedAt: T2, statements: [succ, later] }, { key: c, activatedAt: T0, statements: [genesis] }], at);
+    const trust = walkDocument(doc, [n]);
+    expect(trust.byDigest.get(n.digest)!.activatedAt).toBe(T1);
+    expect(trust.findings.map((f) => f.code).sort()).toEqual(['CHAIN_KEY_WINDOW_DRIFT', 'KEY_STATEMENT_INVALID']);
+    // With no admission it can verify, the key has no signed lower edge here at all.
+    const only = publish([{ key: n, activatedAt: T2, statements: [later] }], at);
+    const bare = walkDocument(only, [n]);
+    expect(bare.byDigest.get(n.digest)!.activatedAt).toBeNull();
+    expect(bare.findings).toContainEqual(expect.objectContaining({ code: 'CHAIN_KEY_WINDOW_DRIFT', keyId: n.kid, detail: `activatedAt ${T2.slice(0, 23)}Z is signed by no admission this walk could verify` }));
   });
 });
 

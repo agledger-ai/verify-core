@@ -28,19 +28,32 @@
  * closure by a key other than its subject; a genesis by its subject alone, and
  * it grants no trust.
  *
- * **Write order.** The rule orders statements by the database's write order.
- * A dump carries it (`created_at`, then the file's own row order, which the
- * producer writes as `created_at, id`). The key documents (`GET
- * /v1/verification-keys`, an export's `exportMetadata.signingKeyStatements`)
- * do not, so statements read from them are ordered by the instant they sign
- * (a genesis or succession by `subject.activatedAt`, a closure by
- * `subject.retiredAt`). For an honest document the two orders agree, because
- * the Server signs the instant it writes. What the signed order cannot do is
- * hold a leaked key to the time it actually wrote a statement: a key retired
- * without `forced` whose private half later leaks can date a statement before
- * its retirement. Such a statement is only ever in a document that did not
- * come from the Server. A forced closure voids every edge out of its key
- * whatever the order, and a walk over a dump applies the real write order.
+ * **Write order.** The rule orders statements by the database's write order,
+ * `created_at` then the row `id`, never by an instant a statement signs. A
+ * dump carries it (`created_at` at milliseconds, then the file's own row
+ * order, which the producer writes as `created_at, id`). Every key document
+ * (`GET /v1/verification-keys`, `/.well-known/agledger-vault-keys.json`, an
+ * export's `exportMetadata.signingKeyStatements`) carries it too, as each
+ * statement's `id` and `createdAt` at microseconds, and lists under a trusted
+ * key its admission, every later genesis or succession it signed, and its
+ * counting closures. A walk over a document therefore dates a window and
+ * cuts an edge back as the engine does, except where the document does not
+ * carry a key the engine verified a statement with (the endorser of a later
+ * succession, the signer of a closure): that statement is
+ * KEY_STATEMENT_INVALID or KEY_CLOSURE_INVALID here, the window is wider than
+ * the engine's, and the listed `activatedAt` or `retiredAt` reports it as
+ * CHAIN_KEY_WINDOW_DRIFT (a listed retirement no counting closure signs, as
+ * KEY_CLOSURE_INVALID).
+ *
+ * A document from a Server that published neither field is ordered by the
+ * instant each statement signs (a genesis or succession by
+ * `subject.activatedAt`, a closure by `subject.retiredAt`). For an honest
+ * document the two orders agree, because the Server signs the instant it
+ * writes. What the signed order cannot do is hold a leaked key to the time it
+ * actually wrote a statement: a key retired without `forced` whose private
+ * half later leaks can date a statement before its retirement. Such a
+ * statement is only ever in a document that did not come from the Server. A
+ * forced closure voids every edge out of its key whatever the order.
  */
 import { decode as cborDecode, encode as cborEncode, rfc8949EncodeOptions } from 'cborg';
 import {
@@ -51,7 +64,7 @@ import {
   verifySignatureBytes,
   type KeyAlgorithm,
 } from './primitives.js';
-import { instantMs } from './instant.js';
+import { instantMs, instantUs } from './instant.js';
 import type { KeyRegistry, KeyTrustState, VerificationKey } from './chain.js';
 
 /** Content type of a key statement's COSE_Sign1 (protected header label 3). */
@@ -90,7 +103,11 @@ const BASE64 = /^[A-Za-z0-9+/]*={0,2}$/;
  * {@link keyStatementsFromExport}.
  */
 export interface KeyStatementInput {
-  /** Row id (the dump's `id`), named in findings. */
+  /**
+   * Row id (the dump's or a key document's `id`), named in findings. Under the
+   * write order it breaks a tie between two statements whose `createdAt` are
+   * the same microsecond, as the engine's `created_at, id` does.
+   */
   id?: string | null;
   /** The source's own `kind` column, bound to the signed `typ`. */
   kind: string;
@@ -105,12 +122,14 @@ export interface KeyStatementInput {
   /** The COSE_Sign1 signatures, base64 or bytes, in signing order. */
   cose: ReadonlyArray<string | Uint8Array>;
   /**
-   * The database write time (the dump's `created_at`). Give it for every
-   * statement or for none: with it the walk applies the write order, without
-   * it the signed order (see the module comment). Under the write order a
-   * statement whose `createdAt` is not an RFC 3339 instant cannot be placed,
-   * and is KEY_STATEMENT_INVALID (`keyStatementFromDumpRow` gives `''` for a
-   * row without one).
+   * The database write time (the dump's `created_at`, a key document's
+   * `createdAt`). Give it for every statement or for none: with it the walk
+   * applies the write order, without it the signed order (see the module
+   * comment). Statements are ordered by it at the precision given, then, for
+   * two at the same microsecond, by `id`, and otherwise in input order. Under
+   * the write order a statement whose `createdAt` is not an RFC 3339 instant
+   * cannot be placed, and is KEY_STATEMENT_INVALID (the adapters give `''`
+   * for a row or document statement without one).
    */
   createdAt?: string;
 }
@@ -194,7 +213,11 @@ export interface KeyTrustEntry {
 }
 
 export interface KeyTrust {
-  /** `written` when every statement carried `createdAt`, else `signed`. */
+  /**
+   * `written` when every statement carried `createdAt` (a dump, or a key
+   * document from a Server that publishes each statement's write time), else
+   * `signed` (an older document; see the module comment).
+   */
   order: 'written' | 'signed';
   /** The anchors walked from, as `sha256:<hex>`. */
   anchors: string[];
@@ -630,21 +653,23 @@ export function computeKeyTrust(input: ComputeKeyTrustInput): KeyTrust {
   // vouches for nothing and is no endorser's fallback.
   const listedKeys = input.keys.filter((k) => typeof k.publicKey === 'string' && k.publicKey !== '');
   const order: KeyTrust['order'] = input.statements.length > 0 && withTime === input.statements.length ? 'written' : 'signed';
-  let statementInputs = [...input.statements];
-  if (order === 'signed') {
-    // With no write time and no row id, two identical statements are one.
-    const seen = new Set<string>();
-    statementInputs = statementInputs.filter((s) => {
-      const cose: readonly unknown[] = Array.isArray(s.cose) ? s.cose : [];
-      const key = cose.map((c) => {
-        const b = toBytes(c);
-        return b === null ? `?${String(c)}` : Buffer.from(b).toString('base64');
-      }).join('|');
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    });
-  }
+  // One stored row, read from two sources (an export and a key document), is
+  // one statement. With no write time and no row id, two identical
+  // statements are one; with them, a row is its id and write time, and a copy
+  // of a row under another id is a second row, as the engine reads it.
+  const seen = new Set<string>();
+  const statementInputs = input.statements.filter((s) => {
+    const cose: readonly unknown[] = Array.isArray(s.cose) ? s.cose : [];
+    const bytes = cose.map((c) => {
+      const b = toBytes(c);
+      return b === null ? `?${String(c)}` : Buffer.from(b).toString('base64');
+    }).join('|');
+    if (order === 'written' && typeof s.id !== 'string') return true;
+    const key = order === 'written' ? JSON.stringify([s.id, s.createdAt, bytes]) : bytes;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 
   const findings: KeyRegistryFinding[] = [];
   // An endorser's key material, by digest. A statement's subject SPKI is bound
@@ -672,12 +697,24 @@ export function computeKeyTrust(input: ComputeKeyTrustInput): KeyTrust {
     if (order !== 'written' || !Number.isNaN(instantMs(st.createdAt!))) return c;
     return { ...c, verdict: 'invalid' as const, detail: 'the row has no parseable created_at to order it by' };
   });
-  const sortKey = (c: CheckedKeyStatement): number | string => {
+  // Under the write order: `createdAt` at the precision given, then `id` for
+  // two stored in the same microsecond (the engine's `created_at, id`), then
+  // input order, which a dump writes as `created_at, id` at the microseconds
+  // its milliseconds hide.
+  type Placed = { c: CheckedKeyStatement; i: number; k: number | string; micro: boolean; r: number };
+  const place = (c: CheckedKeyStatement, i: number): Placed => {
     if (order === 'written') {
-      const at = instantMs(c.input.createdAt!);
-      return Number.isNaN(at) ? Number.POSITIVE_INFINITY : at;
+      const at = instantUs(c.input.createdAt!);
+      return { c, i, k: Number.isNaN(at.us) ? Number.POSITIVE_INFINITY : at.us, micro: at.micro, r: 0 };
     }
-    return signedInstantOf(c) ?? '￿';
+    return { c, i, k: signedInstantOf(c) ?? '￿', micro: false, r: closureLast(c) };
+  };
+  const tieById = (a: Placed, b: Placed): number => {
+    const x = a.c.input.id;
+    const y = b.c.input.id;
+    if (!a.micro || !b.micro || typeof x !== 'string' || typeof y !== 'string') return 0;
+    const [lx, ly] = [x.toLowerCase(), y.toLowerCase()];
+    return lx < ly ? -1 : lx > ly ? 1 : 0;
   };
   // Under the signed order a closure sorts after every admission that signs
   // the same instant, whatever order the document lists them in. A rotation
@@ -689,15 +726,15 @@ export function computeKeyTrust(input: ComputeKeyTrustInput): KeyTrust {
   // not come from the Server could list the succession first anyway.
   const closureLast = (c: CheckedKeyStatement): number => (order === 'signed' && c.payload?.typ === 'closure' ? 1 : 0);
   const inWriteOrder: Statement[] = checked
-    .map((c, i) => ({ c, i, k: sortKey(c), r: closureLast(c) }))
-    .sort((a, b) => (a.k < b.k ? -1 : a.k > b.k ? 1 : a.r - b.r || a.i - b.i))
+    .map(place)
+    .sort((a, b) => (a.k < b.k ? -1 : a.k > b.k ? 1 : a.r - b.r || tieById(a, b) || a.i - b.i))
     .flatMap(({ c, k }, at) => c.verdict === 'invalid' || c.payload === null ? [] : [{
       check: c,
       payload: c.payload,
       subject: c.payload.subject.spkiSha256,
       endorser: c.payload.endorser?.spkiSha256 ?? null,
       at,
-      storedMs: typeof k === 'number' ? k : instantMs(k),
+      storedMs: instantMs(typeof k === 'number' ? c.input.createdAt! : k),
     }]);
   const valid = inWriteOrder.filter((s) => s.check.verdict === 'valid');
 
@@ -888,6 +925,13 @@ export function computeKeyTrust(input: ComputeKeyTrustInput): KeyTrust {
     }
   }
 
+  // Keys an admission names that this walk could not verify. A key document
+  // carries a key's admissions but not every endorser, so the walk can date a
+  // trusted key's window earlier than the engine did, or not at all.
+  const unverifiedAdmission = new Set(checked
+    .filter((c) => c.verdict === 'invalid' && c.payload !== null && c.payload.typ !== 'closure')
+    .map((c) => c.payload!.subject.spkiSha256));
+
   // Findings on listed keys: their columns against the signed values, compared
   // at millisecond precision, the precision a dump or key document carries.
   for (const key of listedKeys) {
@@ -895,8 +939,20 @@ export function computeKeyTrust(input: ComputeKeyTrustInput): KeyTrust {
     if (!entry.trusted || key.keyId !== entry.keyId) continue;
     if (entry.activatedAt !== null && typeof key.activatedAt === 'string' && instantMs(key.activatedAt) !== instantMs(entry.activatedAt)) {
       findings.push({ code: 'CHAIN_KEY_WINDOW_DRIFT', keyId: key.keyId, statementId: null, detail: `activatedAt ${key.activatedAt} differs from the signed ${entry.activatedAt}` });
+    } else if (entry.activatedAt === null && typeof key.activatedAt === 'string' && unverifiedAdmission.has(entry.spkiSha256)) {
+      // The window then has no lower edge here, which is wider than the
+      // listed one: the same drift, read the other way.
+      findings.push({ code: 'CHAIN_KEY_WINDOW_DRIFT', keyId: key.keyId, statementId: null, detail: `activatedAt ${key.activatedAt} is signed by no admission this walk could verify` });
     }
-    if (entry.distrustCutoff !== null) continue;
+    if (entry.distrustCutoff !== null) {
+      // The cutoff is no retirement, so a listed key left active is no drift;
+      // one listed retired earlier than the cutoff is graded more loosely here
+      // than where it was listed (a closure this walk could not verify).
+      if (typeof key.retiredAt === 'string' && instantMs(key.retiredAt) < instantMs(entry.distrustCutoff)) {
+        findings.push({ code: 'CHAIN_KEY_WINDOW_DRIFT', keyId: key.keyId, statementId: null, detail: `retiredAt ${key.retiredAt} is earlier than ${entry.distrustCutoff}, the distrust cutoff this walk ends the key at, and no closure it could verify signs it` });
+      }
+      continue;
+    }
     if (key.status === 'retired') {
       if (entry.retiredAt === null) {
         findings.push({ code: 'KEY_CLOSURE_INVALID', keyId: key.keyId, statementId: null, detail: 'the key is listed as retired and no counting closure signs its retirement' });
@@ -975,23 +1031,51 @@ export function trustKeyFromDumpRow(row: DumpSigningKeyRow): TrustKeyInput {
   };
 }
 
-/** A key's statements as the key documents list them. */
+/**
+ * A key's statement as the key documents list it. A Server that publishes
+ * write order gives each its row `id` and `createdAt` (RFC 3339 UTC at
+ * microsecond precision); an older one gives neither.
+ */
 export interface PublishedKeyStatement {
+  /** The statement row's id (a uuid): the write order's tie-break. */
+  id?: string;
   kind: string;
+  /** When the database stored the statement: the write order. */
+  createdAt?: string;
   cose: string[];
 }
 
-function statementsFromMap(byKey: Iterable<[string, unknown]>, source: string): KeyStatementInput[] {
+/**
+ * The statements of a document keyed by key id. When any statement of the
+ * document carries `createdAt`, the document publishes write order, so one
+ * without it (or with another type) maps to `''` and is KEY_STATEMENT_INVALID
+ * rather than turning the whole document back to the signed order. A
+ * statement with no `id` is named `<prefix><keyId>#<index>`. Internal: the
+ * export path reads supplied keys' statements with it; not re-exported.
+ */
+export function statementsFromMap(byKey: Iterable<[string, unknown]>, source: string, prefix = ''): KeyStatementInput[] {
+  const entries = [...byKey];
+  for (const [keyId, list] of entries) {
+    if (list !== undefined && list !== null && !Array.isArray(list)) throw new TypeError(`${source}: the statements for key ${keyId} are not an array.`);
+  }
+  const timed = entries.some(([, list]) => Array.isArray(list) && list.some((st: unknown) => asRecord(st)?.['createdAt'] !== undefined));
   const out: KeyStatementInput[] = [];
-  for (const [keyId, list] of byKey) {
-    if (list === undefined || list === null) continue;
-    if (!Array.isArray(list)) throw new TypeError(`${source}: the statements for key ${keyId} are not an array.`);
+  for (const [keyId, list] of entries) {
+    if (!Array.isArray(list)) continue;
     list.forEach((st: unknown, i) => {
       const r = asRecord(st);
       if (!r || typeof r['kind'] !== 'string' || !Array.isArray(r['cose'])) {
         throw new TypeError(`${source}: statement ${i} for key ${keyId} is not { kind, cose: [base64...] }.`);
       }
-      out.push({ id: `${keyId}#${i}`, kind: r['kind'], subjectKeyId: keyId, cose: r['cose'] as string[] });
+      const id = typeof r['id'] === 'string' ? r['id'] : `${prefix}${keyId}#${i}`;
+      const createdAt = r['createdAt'];
+      out.push({
+        id,
+        kind: r['kind'],
+        subjectKeyId: keyId,
+        cose: r['cose'] as string[],
+        ...(timed ? { createdAt: typeof createdAt === 'string' ? createdAt : '' } : {}),
+      });
     });
   }
   return out;
