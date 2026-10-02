@@ -65,6 +65,7 @@ export type {
   KeyStatementKind,
   KeyTrust,
   KeyTrustEntry,
+  KeyTrustNote,
   KeyTrustReport,
   KeyTrustStatus,
   PublishedKeyStatement,

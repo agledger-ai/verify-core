@@ -31,6 +31,7 @@ import {
   type VerificationKey,
 } from './chain.js';
 import type { FailureCode } from './failures.js';
+import { instantMs } from './instant.js';
 import type { AgentPublicKeyJwk } from './primitives.js';
 import {
   applyKeyTrust,
@@ -630,6 +631,16 @@ function normalizeSuppliedKeys(
       const out: NormalizedSuppliedEntry = { keyId, spkiBase64: publicKey };
       const activatedAt = (entry as { activatedAt?: unknown }).activatedAt;
       const retiredAt = (entry as { retiredAt?: unknown }).retiredAt;
+      // A window the caller supplies is held to RFC 3339, as distrustedKeys
+      // is: one that is not would be read by the host's clock or not at all.
+      for (const [edge, value] of [['activatedAt', activatedAt], ['retiredAt', retiredAt]] as const) {
+        if (value !== undefined && value !== null && (typeof value !== 'string' || Number.isNaN(instantMs(value)))) {
+          throw new TypeError(
+            `verifyAuditExport: publicKeys[${i}] (key ${keyId}) has ${edge} ${JSON.stringify(value)}, which is not an RFC 3339 instant ` +
+              '(2026-09-01T00:00:00.000Z: a T, an offset or Z, a real calendar date).',
+          );
+        }
+      }
       if (typeof activatedAt === 'string') out.activatedAt = activatedAt;
       if (retiredAt === null || typeof retiredAt === 'string') out.retiredAt = retiredAt;
       return out;

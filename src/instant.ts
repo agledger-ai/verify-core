@@ -5,22 +5,16 @@ const RFC3339 = /^(\d{4})-(\d{2})-(\d{2})[Tt](\d{2}):(\d{2}):(\d{2})(?:\.(\d+))?
  * Milliseconds of an RFC 3339 instant, truncating any finer fraction the way
  * the engine reads a microsecond instant (its `instantToDate`). Key statements
  * sign microsecond instants; entry write times, dump columns and key documents
- * carry milliseconds, so every comparison between them is made here. NaN when
- * the string does not parse. A string that is not RFC 3339 falls back to
- * `Date.parse`, for key windows a caller supplies; a write time the walk
- * places goes through {@link rfc3339Ms}, which does not.
+ * carry milliseconds, so every comparison between them is made here. Strict:
+ * a `T`, an offset or `Z`, a real calendar date and time of day; NaN for
+ * anything else, so no instant is ever placed by how the host's `Date.parse`
+ * reads a date with no offset, a space separator or an impossible day.
  */
 export function instantMs(instant: string): number {
-  const strict = rfc3339Ms(instant);
-  return Number.isNaN(strict) ? Date.parse(instant) : strict;
+  return rfc3339Ms(instant);
 }
 
-/**
- * Milliseconds of a strict RFC 3339 instant (an offset or `Z`, a real calendar
- * date and time of day), truncating any finer fraction. NaN for anything
- * else, so a write time is never placed by how the host reads a date with no
- * offset, a space separator or an impossible day.
- */
+/** {@link instantMs}, under the name the strictness is the point of. */
 export function rfc3339Ms(instant: string): number {
   return parse(instant)?.ms ?? Number.NaN;
 }

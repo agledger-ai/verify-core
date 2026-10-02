@@ -342,3 +342,79 @@ describe('a distrusted key\'s edges on the export path, whatever write time the 
     expect(r.brokenAt).toMatchObject({ position: 1, code: 'CHAIN_SIGNING_KEY_UNANCHORED' });
   });
 });
+
+describe('an honest rotation from a key distrusted after it', () => {
+  // Genesis C, rotation C->N, N retires C; the export is signed under N, and
+  // the operator lists C in distrustedKeys from three days after the rotation.
+  const c = makeKey();
+  const n = makeKey();
+  const genesis = statement('genesis', c, { signers: [c], activatedAt: T0 });
+  const rot = statement('succession', n, { endorser: c, signers: [c, n], activatedAt: T1 });
+  const closure = statement('closure', c, { endorser: n, signers: [n], retiredAt: T1 });
+  const honest = {
+    [c.kid]: [published(genesis, '2026-09-01T00:00:00.000100Z'), published(closure, '2026-09-02T00:00:00.000300Z')],
+    [n.kid]: [published(rot, '2026-09-02T00:00:00.000200Z')],
+  };
+  const run = (pin: TestKey, distrustedKeys: string[]) => {
+    const exp = resignedUnder(n);
+    const m = exp.exportMetadata;
+    m.signingPublicKeys = { [c.kid]: c.publicKey, [n.kid]: n.publicKey };
+    m.signingKeyWindows = { [n.kid]: { activatedAt: '2026-09-02T00:00:00.000Z', retiredAt: null }, [c.kid]: { activatedAt: '2026-09-01T00:00:00.000Z', retiredAt: '2026-09-02T00:00:00.000Z' } };
+    m.anchoredFrom = `sha256:${n.digest}`;
+    m.signingKeyStatements = honest;
+    const publicKeys = [
+      { keyId: c.kid, publicKey: c.publicKey, activatedAt: '2026-09-01T00:00:00.000Z', retiredAt: '2026-09-02T00:00:00.000Z', statements: honest[c.kid]! },
+      { keyId: n.kid, publicKey: n.publicKey, activatedAt: '2026-09-02T00:00:00.000Z', retiredAt: null, statements: honest[n.kid]! },
+    ];
+    return verifyAuditExport(exp, { publicKeys, trustAnchors: [`sha256:${pin.digest}`], distrustedKeys });
+  };
+  const distrustC = [`sha256:${c.digest}@2026-09-05T00:00:00Z`];
+
+  it('pinned on the current key, passes as it does without distrust, and the voided rotation is a note, not a finding', () => {
+    const plain = run(n, []);
+    expect(plain.valid).toBe(true);
+    expect(plain.keyTrust.notes).toEqual([]);
+    const r = run(n, distrustC);
+    expect(r.valid).toBe(true);
+    expect(r.keyTrust).toMatchObject({ status: 'walked', findings: [] });
+    expect(r.keyTrust.anchoredKeyIds).toEqual([c.kid, n.kid].sort());
+    expect(r.keyTrust.notes).toEqual([expect.objectContaining({ keyId: n.kid, statementId: rot.id })]);
+  });
+
+  it('pinned only on the distrusted key, the rotation it signed admits nothing, so entries under the successor fail', () => {
+    const r = run(c, distrustC);
+    expect(r.valid).toBe(false);
+    expect(r.brokenAt).toMatchObject({ position: 1, code: 'CHAIN_SIGNING_KEY_UNANCHORED' });
+    expect(r.keyTrust.unanchoredKeyIds).toContain(n.kid);
+  });
+});
+
+describe('key windows are RFC 3339', () => {
+  const malformed = ['2026-10-02T15:03:54.500', '2026-10-02 15:03:54.5', 'Oct 2 2026 15:03:54', '2026-10-02T15:03:54.500+24:00', 'garbage', '2026-02-30T00:00:00Z', 7];
+
+  it('a window the caller supplies that is not throws TypeError naming the key', () => {
+    const exp = load('valid.json');
+    const keyId = exp.entries[0]!.integrity.signingKeyId!;
+    const publicKey = exp.exportMetadata.signingPublicKeys![keyId]!;
+    for (const bad of malformed) {
+      for (const edge of ['activatedAt', 'retiredAt'] as const) {
+        const entry = { keyId, publicKey, activatedAt: '2026-01-01T00:00:00Z', retiredAt: null, [edge]: bad } as unknown as { keyId: string; publicKey: string };
+        expect(() => verifyAuditExport(load('valid.json'), { publicKeys: [entry] }), `${edge} ${String(bad)}`).toThrow(new RegExp(`key ${keyId}\\) has ${edge}`));
+      }
+    }
+  });
+
+  it('a window the export embeds that is not fails the entries under the key CHAIN_MALFORMED_ENTRY rather than skipping that edge', () => {
+    for (const bad of malformed.filter((b): b is string => typeof b === 'string')) {
+      for (const edge of ['activatedAt', 'retiredAt'] as const) {
+        const exp = load('valid.json');
+        const keyId = exp.entries[0]!.integrity.signingKeyId!;
+        const window = exp.exportMetadata.signingKeyWindows![keyId]!;
+        (window as Record<string, unknown>)[edge] = bad;
+        const r = verifyAuditExport(exp);
+        expect(r.brokenAt, `${edge} ${bad}`).toMatchObject({ position: 1, code: 'CHAIN_MALFORMED_ENTRY' });
+        expect(r.brokenAt!.detail).toBe(`Key ${keyId}'s ${edge} ${JSON.stringify(bad)} is not an RFC 3339 instant, so the entry cannot be placed inside its window.`);
+      }
+    }
+  });
+});

@@ -197,6 +197,19 @@ export interface KeyRegistryFinding {
   detail: string;
 }
 
+/**
+ * Something the walk did that is not a finding and does not fail a verdict:
+ * a statement from a key document signed by a distrusted key that admits
+ * nothing here, because the document's write time is the holder's word and is
+ * never held against the key's cutoff, though the engine, holding it to the
+ * time it was stored, counts it. It still dates windows and cuts edges back.
+ */
+export interface KeyTrustNote {
+  keyId: string | null;
+  statementId: string | null;
+  detail: string;
+}
+
 /** What the walk concludes about one key. */
 export interface KeyTrustEntry {
   keyId: string;
@@ -238,6 +251,8 @@ export interface KeyTrust {
   /** SPKI digests of the undecided keys. */
   undecided: ReadonlySet<string>;
   findings: KeyRegistryFinding[];
+  /** Non-fatal: see {@link KeyTrustNote}. */
+  notes: KeyTrustNote[];
   statements: { total: number; valid: number; invalid: number; unverifiable: number };
 }
 
@@ -814,6 +829,17 @@ export function computeKeyTrust(input: ComputeKeyTrustInput): KeyTrust {
     return cutoff === null || cutoff === undefined || s.storedMs >= cutoff.at;
   };
 
+  /**
+   * What the engine would void: signed by a distrusted key with no cutoff, or
+   * stored at or after its cutoff. On a key document the stored time is the
+   * holder's word, so this decides only whether voiding it is a finding.
+   */
+  const voidedByStoredTime = (s: Statement, signer: string): boolean => {
+    const cutoff = cutoffs.get(signer);
+    return cutoff === null || cutoff === undefined || (order === 'written' && s.storedMs >= cutoff.at);
+  };
+  const notes: KeyTrustNote[] = [];
+
   // Pass 1, then the closures it lets count.
   const pass1 = reach(anchors, edges.filter((e) => !distrusted(e.via, e.from)));
   const counting = valid.filter((s) => s.payload.typ === 'closure' && s.endorser !== null
@@ -902,7 +928,18 @@ export function computeKeyTrust(input: ComputeKeyTrustInput): KeyTrust {
   for (const s of valid) {
     const e = s.endorser;
     const by = s.payload.endorser?.kid ?? '';
-    if (e !== null && distrusted(s, e)) {
+    if (e !== null && distrusted(s, e) && !voidedByStoredTime(s, e)) {
+      // Voided only because a key document's time is not held against the
+      // cutoff: it admits nothing, but a statement the engine would count is
+      // no finding. It still dates windows and cuts edges back, so it can
+      // only narrow trust. The checks below still apply to it.
+      const cutoff = cutoffs.get(e)!;
+      notes.push({
+        keyId: s.payload.subject.kid,
+        statementId: s.check.id,
+        detail: `a ${s.payload.typ} by ${by}, which distrustedKeys distrusts from ${cutoff.instant}; it admits nothing here, because a key document's write time${typeof s.check.input.createdAt === 'string' ? ` (${s.check.input.createdAt})` : ''} is not signed and is not held against the cutoff. A dump taken from the Server holds it to the time it was stored.`,
+      });
+    } else if (e !== null && distrusted(s, e)) {
       const cutoff = cutoffs.get(e);
       const closed = s.payload.subject.retiredAt;
       const now = byDigest.get(s.subject);
@@ -964,7 +1001,7 @@ export function computeKeyTrust(input: ComputeKeyTrustInput): KeyTrust {
       // The cutoff is no retirement, so a listed key left active is no drift;
       // one listed retired earlier than the cutoff is graded more loosely here
       // than where it was listed (a closure this walk could not verify).
-      if (typeof key.retiredAt === 'string' && instantMs(key.retiredAt) < instantMs(entry.distrustCutoff)) {
+      if (typeof key.retiredAt === 'string' && !(instantMs(key.retiredAt) >= instantMs(entry.distrustCutoff))) {
         findings.push({ code: 'CHAIN_KEY_WINDOW_DRIFT', keyId: key.keyId, statementId: null, detail: `retiredAt ${key.retiredAt} is earlier than ${entry.distrustCutoff}, the distrust cutoff this walk ends the key at, and no closure it could verify signs it` });
       }
       continue;
@@ -987,6 +1024,7 @@ export function computeKeyTrust(input: ComputeKeyTrustInput): KeyTrust {
     trusted,
     undecided,
     findings,
+    notes,
     statements: {
       total: checked.length,
       valid: checked.filter((c) => c.verdict === 'valid').length,
@@ -1216,6 +1254,8 @@ export interface KeyTrustReport {
   unanchoredKeyIds: string[];
   undecidedKeyIds: string[];
   findings: KeyRegistryFinding[];
+  /** Non-fatal notes from the walk (see {@link KeyTrustNote}); they never fail a verdict. */
+  notes: KeyTrustNote[];
 }
 
 /**
@@ -1239,6 +1279,7 @@ export function reportKeyTrust(registry: KeyRegistry, trust: KeyTrust | null, an
       unanchoredKeyIds: [],
       undecidedKeyIds: [],
       findings: [],
+      notes: [],
     };
   }
   const unanchored = ids('unanchored');
@@ -1255,6 +1296,7 @@ export function reportKeyTrust(registry: KeyRegistry, trust: KeyTrust | null, an
     unanchoredKeyIds: unanchored,
     undecidedKeyIds: ids('undecided'),
     findings: trust.findings,
+    notes: trust.notes,
   };
 }
 
