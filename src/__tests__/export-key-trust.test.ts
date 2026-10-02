@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { verifyAuditExport, type RecordAuditExportInput } from '../audit-export.js';
+import { makeKey, statement } from './key-statements-helpers.js';
 
 /**
  * trustAnchors on the export path, over the corpus's real exports: the
@@ -20,6 +21,12 @@ const pinOf = (exp: RecordAuditExportInput): string => {
   return pin;
 };
 const STRANGER = `sha256:${'ab'.repeat(32)}`;
+/** A key nothing else names, with its genesis, as an older key document lists it. */
+const strangerGenesis = () => {
+  const k = makeKey();
+  const g = statement('genesis', k, { signers: [k] });
+  return { keyId: k.kid, publicKey: k.publicKey, statement: { kind: g.kind, cose: g.cose.map((b) => Buffer.from(b as Uint8Array).toString('base64')) } };
+};
 
 describe('verifyAuditExport with trustAnchors', () => {
   it('without anchors, the result says no key was anchored and the anchoring check did not run', () => {
@@ -37,7 +44,7 @@ describe('verifyAuditExport with trustAnchors', () => {
     const r = verifyAuditExport(exp, { trustAnchors: [pinOf(exp)] });
     expect(r.valid).toBe(true);
     expect(r.optionalChecks.key_anchoring).toBe('applied');
-    expect(r.keyTrust).toMatchObject({ status: 'walked', order: 'signed', anchoredFromPinned: true, unanchoredKeyIds: [], findings: [] });
+    expect(r.keyTrust).toMatchObject({ status: 'walked', order: 'written', anchoredFromPinned: true, unanchoredKeyIds: [], findings: [] });
     expect(r.keyTrust.anchoredKeyIds).toEqual([exp.entries[0]!.integrity.signingKeyId]);
   });
 
@@ -104,6 +111,35 @@ describe('verifyAuditExport with trustAnchors', () => {
     const r = verifyAuditExport(exp, { publicKeys, trustAnchors: [pinOf(load('valid.json'))], requireSuppliedKeys: true });
     expect(r.valid).toBe(true);
     expect(r.keyProvenance).toEqual({ supplied: 3, embedded: 0 });
+  });
+
+  it('a statement the export and a supplied key both carry is one row, so it is no second admission', () => {
+    const exp = load('valid.json');
+    const keyId = exp.entries[0]!.integrity.signingKeyId!;
+    const statements = structuredClone(exp.exportMetadata.signingKeyStatements![keyId]!);
+    expect(statements.every((st) => typeof st.id === 'string' && typeof st.createdAt === 'string')).toBe(true);
+    const publicKeys = [{ keyId, publicKey: exp.exportMetadata.signingPublicKeys![keyId]!, statements }];
+    const r = verifyAuditExport(exp, { publicKeys, trustAnchors: [pinOf(exp)] });
+    expect(r.valid).toBe(true);
+    expect(r.keyTrust).toMatchObject({ order: 'written', findings: [] });
+  });
+
+  it('a supplied key document from a Server that published no write order is read with the export\'s statements', () => {
+    const exp = load('valid.json');
+    const keyId = exp.entries[0]!.integrity.signingKeyId!;
+    const older = exp.exportMetadata.signingKeyStatements![keyId]!.map(({ kind, cose }) => ({ kind, cose: [...cose] }));
+    const publicKeys = [{ keyId, publicKey: exp.exportMetadata.signingPublicKeys![keyId]!, statements: older }];
+    // The same rows: the export's write order stands.
+    const same = verifyAuditExport(exp, { publicKeys, trustAnchors: [pinOf(exp)] });
+    expect(same.valid).toBe(true);
+    expect(same.keyTrust).toMatchObject({ order: 'written', findings: [] });
+    // A statement only the older document carries has no write time to place
+    // it by, so the walk falls back to the signed order for all of them.
+    const stranger = strangerGenesis();
+    const extra = [{ keyId: stranger.keyId, publicKey: stranger.publicKey, statements: [stranger.statement] }, ...publicKeys];
+    const mixed = verifyAuditExport(exp, { publicKeys: extra, trustAnchors: [pinOf(exp)] });
+    expect(mixed.keyTrust.order).toBe('signed');
+    expect(mixed.entries.every((e) => e.valid)).toBe(true);
   });
 
   it('a distrusted key with no instant and no retirement is trusted for nothing, even as the pin', () => {
