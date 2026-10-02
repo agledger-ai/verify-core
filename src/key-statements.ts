@@ -65,6 +65,7 @@ import {
   type KeyAlgorithm,
 } from './primitives.js';
 import { instantMs, instantUs, rfc3339Ms } from './instant.js';
+import { assertKnownOptions } from './options.js';
 import type { KeyRegistry, KeyTrustState, VerificationKey } from './chain.js';
 
 /** Content type of a key statement's COSE_Sign1 (protected header label 3). */
@@ -324,6 +325,27 @@ export function parseDistrustedKeys(raw: string | readonly string[]): Distrusted
     out.push({ spkiSha256: digest, cutoff });
   }
   return out;
+}
+
+/**
+ * Throw `TypeError` when a key is both pinned and distrusted, as the Server
+ * refuses to boot on the same pair (`VaultKeyDistrustedError`): a key is the
+ * root the walk trusts or one it must not, never both. `computeKeyTrust`
+ * itself walks such a pair as the engine's walk does; a verifier calls this
+ * on what its caller passed before it walks.
+ */
+export function assertNotPinnedAndDistrusted(
+  trustAnchors: string | readonly string[] | undefined,
+  distrustedKeys: ReadonlyArray<string | DistrustedKey> | undefined,
+): void {
+  if (trustAnchors === undefined || distrustedKeys === undefined) return;
+  const anchors = new Set(parseTrustAnchors(trustAnchors));
+  const both = normalizeDistrusted(distrustedKeys).find((d) => anchors.has(d.spkiSha256));
+  if (both === undefined) return;
+  throw new TypeError(
+    `sha256:${both.spkiSha256} is both a trust anchor and a distrusted key. Pin a key you trust and distrust one that leaked, never the same key: `
+    + 'pin its successor and keep the distrust entry, or drop the distrust entry. The Server refuses to start with the same pair in VAULT_TRUST_ANCHORS and VAULT_DISTRUSTED_KEYS.',
+  );
 }
 
 function normalizeDistrusted(raw: ReadonlyArray<string | DistrustedKey> | undefined): DistrustedKey[] {
@@ -660,6 +682,7 @@ function signedInstantOf(c: CheckedKeyStatement): string | null {
  * at all, and when some statements carry `createdAt` and others do not.
  */
 export function computeKeyTrust(input: ComputeKeyTrustInput): KeyTrust {
+  assertKnownOptions('computeKeyTrust', input, ['keys', 'statements', 'trustAnchors', 'distrustedKeys'] satisfies ReadonlyArray<keyof ComputeKeyTrustInput>);
   const anchorDigests = parseTrustAnchors(input.trustAnchors);
   if (anchorDigests.length === 0) {
     throw new TypeError('computeKeyTrust needs at least one trust anchor (sha256:<64 hex>). With none, no key can be trusted.');
@@ -963,6 +986,20 @@ export function computeKeyTrust(input: ComputeKeyTrustInput): KeyTrust {
         finding('KEY_CLOSURE_INVALID', s, `the closure is signed by ${by} after its own retirement, and still counts: it ends ${s.payload.subject.kid}'s window at ${retiredAt}. ${distrustHint}`);
       } else if (activated !== null && retiredAt < activated) {
         finding('KEY_CLOSURE_INVALID', s, `the closure retires ${s.payload.subject.kid} at ${retiredAt}, before the ${activated} it was activated, and still counts. ${distrustHint}`);
+      } else if (!trusted.has(e) && (trusted.has(s.subject) || undecided.has(s.subject))) {
+        // The engine publishes only trusted keys and the undecided ones one
+        // step from them, so a walk over the subject's key document cannot
+        // verify this closure. It reads differently from the engine only
+        // where no closure a published key signed dates the window as early,
+        // or forces it too.
+        const published = counting.filter((c) => c.subject === s.subject && trusted.has(c.endorser ?? ''));
+        const earlier = published.every((c) => retiredAt < (c.payload.subject.retiredAt ?? ''));
+        const forcedAlone = s.payload.forced === true && !published.some((c) => c.payload.forced === true);
+        if (earlier || forcedAlone) {
+          const effect = earlier ? `ends ${s.payload.subject.kid}'s window at ${retiredAt}` : `retires ${s.payload.subject.kid} with force`;
+          const at = typeof s.check.input.createdAt === 'string' ? `@${s.check.input.createdAt}` : '';
+          finding('KEY_CLOSURE_INVALID', s, `the closure is signed by ${by}, which is reached but not anchored, and still counts: it ${effect}, and no key surface publishes ${by}, so an offline walk over the published statements cannot verify it and reads ${s.payload.subject.kid} as the engine does not. If ${by} is honest, pin sha256:${e} in trustAnchors (VAULT_TRUST_ANCHORS on the Server, which publishes it); if it leaked, distrustedKeys sha256:${e}${at} (VAULT_DISTRUSTED_KEYS on the Server) makes this closure, and what ${by} signed after it, count for nothing.`);
+        }
       }
       continue;
     }
@@ -1236,6 +1273,21 @@ export function applyKeyTrust(registry: KeyRegistry, trust: KeyTrust): KeyRegist
  * on either is `unanchored`, never `trusted`.
  */
 export type KeyTrustStatus = 'walked' | 'no_anchor' | 'no_anchored_signature';
+
+/**
+ * The one-word reading of a verification result, as every surface prints it:
+ * `failed` when it is not valid, `trusted` when it is valid and the walk
+ * anchored a signature (`keyTrust.status: 'walked'`), and `unanchored` when it
+ * is valid but rests on nothing pinned. Read this rather than `valid` alone: a
+ * valid result with no `trustAnchors` is `unanchored`.
+ */
+export type Verdict = 'trusted' | 'unanchored' | 'failed';
+
+/** The {@link Verdict} of a result that carries `valid` and a `keyTrust` report. */
+export function verdictOf(result: { valid: boolean; keyTrust: Pick<KeyTrustReport, 'status'> }): Verdict {
+  if (!result.valid) return 'failed';
+  return result.keyTrust.status === 'walked' ? 'trusted' : 'unanchored';
+}
 
 /** What a verification result says about key anchoring. */
 export interface KeyTrustReport {

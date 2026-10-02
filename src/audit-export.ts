@@ -32,19 +32,23 @@ import {
 } from './chain.js';
 import type { FailureCode } from './failures.js';
 import { instantMs } from './instant.js';
+import { assertKnownOptions } from './options.js';
 import type { AgentPublicKeyJwk } from './primitives.js';
 import {
   applyKeyTrust,
+  assertNotPinnedAndDistrusted,
   computeKeyTrust,
   keyStatementsFromExport,
   statementsFromMap,
   reportKeyTrust,
   settleKeyTrust,
+  verdictOf,
   type DistrustedKey,
   type KeyStatementInput,
   type KeyTrustReport,
   type PublishedKeyStatement,
   type TrustKeyInput,
+  type Verdict,
 } from './key-statements.js';
 
 /** One entry of a `/audit-export` document. */
@@ -161,9 +165,12 @@ export interface VerifyExportOptions {
    *   - `SuppliedKeyEntry[]`: the natural shape returned by
    *     `client.verificationKeys.list().data` and SCITT COSE_KeySet listings
    *
+   *   - `{ data: SuppliedKeyEntry[] }`: the `/v1/verification-keys` body as
+   *     served, read as its `data`
+   *
    * Anything else throws `TypeError` at the boundary.
    */
-  publicKeys?: Record<string, string> | ReadonlyArray<SuppliedKeyEntry>;
+  publicKeys?: Record<string, string> | ReadonlyArray<SuppliedKeyEntry> | { data: ReadonlyArray<SuppliedKeyEntry> };
   /** Require every entry to reference this keyId (else CHAIN_KEY_POLICY_VIOLATION). */
   requireKeyId?: string;
   /**
@@ -273,6 +280,12 @@ export interface VerifyExportResult {
   unsignedProjectionFields: string[];
   /** Agent signatures present on the chain vs re-verified offline (see `agentKeys`). */
   agentSignatures: { present: number; verified: number };
+  /**
+   * `trusted`, `unanchored` or `failed` (see `Verdict`). Read this rather
+   * than `valid` alone: a valid result with no `trustAnchors`, or none that
+   * anchored a signature, is `unanchored`, which is not a trusted verdict.
+   */
+  verdict: Verdict;
 }
 
 const SUPPORTED_FORMAT_VERSION = '2.0';
@@ -292,8 +305,11 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  */
 export function verifyAuditExport(
   exportData: RecordAuditExportInput,
-  options: VerifyExportOptions = {},
+  given: VerifyExportOptions = {},
 ): VerifyExportResult {
+  assertKnownOptions('verifyAuditExport', given, EXPORT_OPTIONS);
+  // The `/v1/verification-keys` body as served, `{ data: [...] }`, is its array.
+  const options: VerifyExportOptions = isKeysEnvelope(given.publicKeys) ? { ...given, publicKeys: given.publicKeys.data } : given;
   if (!isRecord(exportData) || !isRecord(exportData.exportMetadata)
     || (exportData.entries !== undefined && exportData.entries !== null && !Array.isArray(exportData.entries))) {
     throw new TypeError('Expected an /audit-export document: { exportMetadata: { recordId, ... }, entries: [...] }.');
@@ -302,6 +318,7 @@ export function verifyAuditExport(
     && options.distrustedKeys !== undefined && options.distrustedKeys.length > 0) {
     throw new TypeError('distrustedKeys act only inside the key-statement walk, which runs from trustAnchors; pass trustAnchors as well.');
   }
+  assertNotPinnedAndDistrusted(options.trustAnchors, options.distrustedKeys);
   const meta = exportData.exportMetadata;
   const entries = exportData.entries ?? [];
 
@@ -430,8 +447,9 @@ export function verifyAuditExport(
       ? { position: 0, code: registryFinding.code, detail: registryFinding.detail }
       : undefined;
 
+  const valid = chain.valid && keyTrust.findings.length === 0;
   return {
-    valid: chain.valid && keyTrust.findings.length === 0,
+    valid,
     totalEntries: chain.totalEntries,
     verifiedEntries: chain.verifiedEntries,
     brokenAt,
@@ -449,7 +467,14 @@ export function verifyAuditExport(
     unsignedProjectionFields: exportData.verificationGuide?.unsignedFields ?? [],
     agentSignatures: chain.agentSignatures,
     keyTrust,
+    verdict: verdictOf({ valid, keyTrust }),
   };
+}
+
+const EXPORT_OPTIONS = ['publicKeys', 'requireKeyId', 'requireSuppliedKeys', 'trustAnchors', 'distrustedKeys', 'agentKeys'] as const satisfies ReadonlyArray<keyof VerifyExportOptions>;
+
+function isKeysEnvelope(value: VerifyExportOptions['publicKeys']): value is { data: ReadonlyArray<SuppliedKeyEntry> } {
+  return isRecord(value) && Array.isArray(value.data);
 }
 
 /**
@@ -523,6 +548,7 @@ function earlyFailure(recordId: string, totalEntries: number, detail: string): V
     unsignedProjectionFields: [],
     agentSignatures: { present: 0, verified: 0 },
     keyTrust: reportKeyTrust(new Map(), null, null),
+    verdict: 'failed',
   };
 }
 

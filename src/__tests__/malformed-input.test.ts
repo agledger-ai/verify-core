@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { verifyAuditExport } from '../audit-export.js';
+import { underAdmittedKey } from './export-fixtures.js';
 import type { RecordAuditExportInput } from '../audit-export.js';
 import { buildKeyRegistry, verifyChain, type NormalizedEntry } from '../chain.js';
 import { buildPredicateForRow } from '../primitives.js';
@@ -36,28 +37,28 @@ function ndjson<T>(rel: string): T[] {
 const ANCHOR = load('export/valid.json').exportMetadata.anchoredFrom!;
 const KEY_ID = ANCHOR.slice('sha256:'.length, 'sha256:'.length + 16);
 
-/** The middle entry's write time: a distrust cutoff that splits the chain. */
-function midCutoff(): string {
-  const at = load('export/valid.json').entries[1]!.createdAt!;
-  return `${ANCHOR}@${at}`;
-}
-
 describe('an entry with no readable createdAt fails closed (CHAIN_MALFORMED_ENTRY)', () => {
   it('a distrusted key cannot be slipped past its cutoff by nulling the entry times', () => {
-    const plain = verifyAuditExport(load('export/valid.json'), { trustAnchors: [ANCHOR], distrustedKeys: [midCutoff()] });
-    expect(plain.valid).toBe(false);
-    expect(plain.entries.map((e) => e.code)).toContain('CHAIN_KEY_EXPIRED');
+    // valid.json under a key its pinned root admitted, distrusted from the middle entry's write time.
+    const build = () => {
+      const { exp, pin, key } = underAdmittedKey();
+      return { exp, options: { trustAnchors: [pin], distrustedKeys: [`sha256:${key.digest}@${exp.entries[1]!.createdAt!}`] }, keyId: key.kid };
+    };
+    const plain = build();
+    const p = verifyAuditExport(plain.exp, plain.options);
+    expect(p.valid).toBe(false);
+    expect(p.entries.map((e) => e.code)).toContain('CHAIN_KEY_EXPIRED');
 
     for (const blank of [undefined, null, 'garbage', 7]) {
-      const exp = load('export/valid.json');
+      const { exp, options, keyId } = build();
       for (const e of exp.entries) {
         if (blank === undefined) delete e.createdAt;
         else (e as { createdAt?: unknown }).createdAt = blank;
       }
-      const r = verifyAuditExport(exp, { trustAnchors: [ANCHOR], distrustedKeys: [midCutoff()] });
+      const r = verifyAuditExport(exp, options);
       expect(r.valid).toBe(false);
       expect(r.brokenAt).toMatchObject({ position: 1, code: 'CHAIN_MALFORMED_ENTRY' });
-      expect(r.brokenAt?.detail).toBe(`Entry has no parseable createdAt, so it cannot be placed inside key ${KEY_ID}'s window.`);
+      expect(r.brokenAt?.detail).toBe(`Entry has no parseable createdAt, so it cannot be placed inside key ${keyId}'s window.`);
       expect(r.optionalChecks.key_temporal).toBe('applied');
     }
   });

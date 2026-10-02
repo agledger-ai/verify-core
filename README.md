@@ -39,13 +39,19 @@ const result = verifyAuditExport(exportDocument, {
   trustAnchors: ['sha256:15d63684b387235c47fe3a81e3004b928f4ea535236a2c1b47465ce5fdd7ce0e'],
 });
 
-if (!result.valid) {
+if (result.verdict === 'failed') {
   console.error(`Broken at position ${result.brokenAt?.position}: ${result.brokenAt?.code}`);
   process.exit(1);
 }
-console.log(result.keyTrust.status); // 'walked', 'no_anchor' or 'no_anchored_signature'
-// { valid: true, verifiedEntries, totalEntries, keyTrust, keyProvenance: { supplied, embedded }, ... }
+console.log(result.verdict); // 'trusted', or 'unanchored' when nothing pinned backs the pass
+// { valid: true, verdict, verifiedEntries, totalEntries, keyTrust, keyProvenance: { supplied, embedded }, ... }
 ```
+
+Read `verdict` rather than `valid`: a valid result with no `trustAnchors` is
+`unanchored`, which is not a trusted verdict. An option the function does not
+read throws `TypeError` rather than being ignored, so a misspelt option, or
+`requireOutOfBandKeys` (renamed `requireSuppliedKeys` in 2.0.0), cannot turn a
+check off without a word.
 
 ## What it verifies
 
@@ -122,9 +128,11 @@ statements sign. `keyTrust.status` says whether a pass can be trusted:
   proves nothing about the pin.
 
 A pass on `no_anchor` or `no_anchored_signature` is not a trusted verdict; the
-`detail` says so, and every AGLedger surface reports it as `unanchored`.
-`distrustedKeys` without `trustAnchors` throws `TypeError`, since nothing would
-apply them.
+`detail` says so, and `verdict` (and every AGLedger surface) reports it as
+`unanchored`. `distrustedKeys` without `trustAnchors` throws `TypeError`, since
+nothing would apply them, and so does a key that is both pinned and
+distrusted, which the Server refuses to start with: pin the successor of a key
+that leaked.
 
 ```ts
 import { verifyAuditExport } from '@agledger/verify-core';
@@ -151,7 +159,11 @@ result invalid, at position 0:
   its closure or after the key was already admitted;
 - `KEY_CLOSURE_INVALID`: a retired key with no closure that counts for it, or
   a closure by a key the walk does not anchor, by a key after its own
-  retirement, or dated before its subject was activated;
+  retirement, or dated before its subject was activated, or one by a key the
+  walk reaches but does not anchor that retires an anchored key earlier, or
+  with force, than any closure a published key signed (a walk over the
+  Server's published key documents cannot see it, so it reads that key
+  differently);
 - `CHAIN_KEY_WINDOW_DRIFT`: a listed window or status that differs from the
   signed value (compared at millisecond precision).
 
@@ -333,13 +345,14 @@ resolve, which is exactly when the question matters most.
 
 ## Supplied keys
 
-`options.publicKeys` accepts either of two shapes:
+`options.publicKeys` accepts these shapes:
 
 - a **`Record<keyId, base64SpkiDer>`** map (compact, keyed by key id), or
 - a **`SuppliedKeyEntry[]`** array, the natural shape returned by
   `client.verificationKeys.list().data` and SCITT COSE_KeySet listings, where
   each entry is `{ keyId, publicKey, activatedAt?, retiredAt?, statements? }`
-  (`publicKey` is SPKI DER base64).
+  (`publicKey` is SPKI DER base64), or the `/v1/verification-keys` body as
+  served, `{ data: [...] }`, read as its `data`.
 
 Both are normalized at the boundary; anything else throws `TypeError`
 (fail-closed: the verifier never silently falls back to embedded keys).

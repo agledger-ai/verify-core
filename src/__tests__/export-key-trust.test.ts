@@ -1,11 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'node:fs';
-import { createHash, sign } from 'node:crypto';
-import { dirname, join } from 'node:path';
-import { decode as cborDecode, encode as cborEncode, rfc8949EncodeOptions } from 'cborg';
-import { fileURLToPath } from 'node:url';
 import { verifyAuditExport, type RecordAuditExportInput } from '../audit-export.js';
-import { T0, T1, T2, makeKey, statement, type Stored, type TestKey } from './key-statements-helpers.js';
+import { load, published, resignedUnder, underAdmittedKey } from './export-fixtures.js';
+import { T0, T1, T2, makeKey, statement, type TestKey } from './key-statements-helpers.js';
 
 /**
  * trustAnchors on the export path, over the corpus's real exports: the
@@ -14,9 +10,6 @@ import { T0, T1, T2, makeKey, statement, type Stored, type TestKey } from './key
  * so rather than reading as clean.
  */
 
-const EXPORT_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'testdata', 'conformance', 'export');
-const load = (name: string): RecordAuditExportInput =>
-  JSON.parse(readFileSync(join(EXPORT_DIR, name), 'utf8')) as RecordAuditExportInput;
 const pinOf = (exp: RecordAuditExportInput): string => {
   const pin = exp.exportMetadata.anchoredFrom;
   if (!pin) throw new Error('the corpus export carries anchoredFrom');
@@ -68,7 +61,7 @@ describe('verifyAuditExport with trustAnchors', () => {
 
   it('walks a three-key history across an algorithm change from the Server\'s current key', () => {
     const exp = load('valid-es256.json');
-    const r = verifyAuditExport(exp, { publicKeys: JSON.parse(readFileSync(join(EXPORT_DIR, 'keys-oob-es256.json'), 'utf8')) as Record<string, string>, trustAnchors: [pinOf(exp)] });
+    const r = verifyAuditExport(exp, { publicKeys: load('keys-oob-es256.json') as unknown as Record<string, string>, trustAnchors: [pinOf(exp)] });
     expect(r.valid).toBe(true);
     expect(r.keyTrust.anchoredKeyIds).toHaveLength(3);
     expect(r.keyTrust.findings).toEqual([]);
@@ -144,19 +137,27 @@ describe('verifyAuditExport with trustAnchors', () => {
     expect(mixed.entries.every((e) => e.valid)).toBe(true);
   });
 
-  it('a distrusted key with no instant and no retirement is trusted for nothing, even as the pin', () => {
+  it('refuses a key that is both pinned and distrusted, as the Server refuses to start with it', () => {
     const exp = load('valid.json');
-    const r = verifyAuditExport(exp, { trustAnchors: [pinOf(exp)], distrustedKeys: [pinOf(exp)] });
+    for (const distrust of [pinOf(exp), `${pinOf(exp)}@2026-09-01T00:00:00Z`, pinOf(exp).toUpperCase().replace('SHA256', 'sha256')]) {
+      expect(() => verifyAuditExport(exp, { trustAnchors: [pinOf(exp)], distrustedKeys: [distrust] })).toThrow(/both a trust anchor and a distrusted key/);
+    }
+  });
+
+  it('a distrusted key with no instant and no retirement is trusted for nothing, though its admitting root is pinned', () => {
+    const { exp, pin, key } = underAdmittedKey();
+    expect(verifyAuditExport(exp, { trustAnchors: [pin] }).valid).toBe(true);
+    const r = verifyAuditExport(exp, { trustAnchors: [pin], distrustedKeys: [`sha256:${key.digest}`] });
     expect(r.brokenAt?.code).toBe('CHAIN_SIGNING_KEY_UNANCHORED');
   });
 
   it('a key distrusted from an instant and never retired fails what it wrote after, worded as the distrust cutoff', () => {
-    const exp = load('valid.json');
+    const { exp, pin, key } = underAdmittedKey();
     // Between the first entry and the second, at microsecond precision.
     const between = (Date.parse(exp.entries[0]!.createdAt!) + Date.parse(exp.entries[1]!.createdAt!)) / 2;
     const cutoff = `${new Date(Math.floor(between)).toISOString().slice(0, 23)}000Z`;
-    const r = verifyAuditExport(exp, { trustAnchors: [pinOf(exp)], distrustedKeys: [`${pinOf(exp)}@${cutoff}`] });
-    const keyId = exp.entries[1]!.integrity.signingKeyId!;
+    const r = verifyAuditExport(exp, { trustAnchors: [pin], distrustedKeys: [`sha256:${key.digest}@${cutoff}`] });
+    const keyId = key.kid;
     expect(r.entries[0]!.valid).toBe(true);
     expect(r.brokenAt).toMatchObject({
       position: 2,
@@ -240,44 +241,14 @@ describe('verifyAuditExport with trustAnchors', () => {
   });
 });
 
-/**
- * valid.json with every entry re-signed under `key` and the chain relinked:
- * what the holder of a leaked key that admitted `key` can produce.
- */
-function resignedUnder(key: TestKey): RecordAuditExportInput {
-  const exp = load('valid.json');
-  const priv = { key: Buffer.from(key.privateKey, 'base64'), format: 'der' as const, type: 'pkcs8' as const };
-  let prev: Buffer | null = null;
-  for (const e of exp.entries) {
-    const [prot0, , payload] = cborDecode(Buffer.from(e.integrity.coseSign1, 'base64').subarray(1), { useMaps: true }) as [Uint8Array, unknown, Uint8Array];
-    const header = cborDecode(prot0, { useMaps: true }) as Map<number, unknown>;
-    header.set(4, Uint8Array.from(Buffer.from(key.kid, 'hex')));
-    (header.get(-65537) as Map<number, unknown>).set(2, prev === null ? null : Uint8Array.from(prev));
-    const prot = cborEncode(header, rfc8949EncodeOptions);
-    const sig = sign(null, cborEncode(['Signature1', prot, new Uint8Array(0), payload], rfc8949EncodeOptions), priv);
-    const envelope = Buffer.concat([Buffer.from([0xd2]), Buffer.from(cborEncode([prot, new Map(), payload, Uint8Array.from(sig)], rfc8949EncodeOptions))]);
-    const hash = createHash('sha256').update(envelope).digest();
-    e.integrity.coseSign1 = envelope.toString('base64');
-    e.integrity.payloadHash = hash.toString('hex');
-    e.integrity.previousHash = prev === null ? null : prev.toString('hex');
-    e.integrity.signingKeyId = key.kid;
-    prev = hash;
-  }
-  return exp;
-}
-
-const published = (st: Stored, createdAt?: string) => ({
-  ...(createdAt !== undefined ? { id: st.id, createdAt } : {}),
-  kind: st.kind,
-  cose: st.cose.map((b) => Buffer.from(b as Uint8Array).toString('base64')),
-});
-
 describe('a distrusted key\'s edges on the export path, whatever write time the file gives', () => {
-  // C is pinned and distrusted from T1; whoever holds C's leaked half admits X
-  // after that and signs the export under X.
+  // Root R is pinned and admitted C; C is distrusted from T1, and whoever
+  // holds C's leaked half admits X after that and signs the export under X.
+  const r0 = makeKey();
   const c = makeKey();
   const x = makeKey();
-  const genesis = statement('genesis', c, { signers: [c], activatedAt: T0 });
+  const root = statement('genesis', r0, { signers: [r0], activatedAt: T0 });
+  const admitC = statement('succession', c, { endorser: r0, signers: [r0, c], activatedAt: T0 });
   const succ = statement('succession', x, { endorser: c, signers: [c, x], activatedAt: T2 });
 
   it.each([
@@ -287,21 +258,28 @@ describe('a distrusted key\'s edges on the export path, whatever write time the 
   ])('an export carrying the admission with %s does not anchor the key it admits', (_label, at) => {
     const exp = resignedUnder(x);
     const m = exp.exportMetadata;
-    m.signingPublicKeys = { [c.kid]: c.publicKey, [x.kid]: x.publicKey };
-    m.signingKeyWindows = { [c.kid]: { activatedAt: '2026-09-01T00:00:00.000Z', retiredAt: null }, [x.kid]: { activatedAt: '2026-09-03T00:00:00.000Z', retiredAt: null } };
-    m.anchoredFrom = `sha256:${c.digest}`;
+    m.signingPublicKeys = { [r0.kid]: r0.publicKey, [c.kid]: c.publicKey, [x.kid]: x.publicKey };
+    m.signingKeyWindows = {
+      [r0.kid]: { activatedAt: '2026-09-01T00:00:00.000Z', retiredAt: null },
+      [c.kid]: { activatedAt: '2026-09-01T00:00:00.000Z', retiredAt: null },
+      [x.kid]: { activatedAt: '2026-09-03T00:00:00.000Z', retiredAt: null },
+    };
+    m.anchoredFrom = `sha256:${r0.digest}`;
     m.signingKeyStatements = {
-      [c.kid]: [published(genesis, at === undefined ? undefined : '2026-09-01T00:00:00.000000Z')],
+      [r0.kid]: [published(root, at === undefined ? undefined : '2026-09-01T00:00:00.000000Z')],
+      [c.kid]: [published(admitC, at === undefined ? undefined : '2026-09-01T00:00:00.000100Z')],
       [x.kid]: [published(succ, at)],
     };
-    const r = verifyAuditExport(exp, { trustAnchors: [`sha256:${c.digest}`], distrustedKeys: [`sha256:${c.digest}@${T1}`] });
+    const r = verifyAuditExport(exp, { trustAnchors: [`sha256:${r0.digest}`], distrustedKeys: [`sha256:${c.digest}@${T1}`] });
     expect(r.valid).toBe(false);
     expect(r.brokenAt).toMatchObject({ position: 1, code: 'CHAIN_SIGNING_KEY_UNANCHORED' });
     expect(r.keyTrust.unanchoredKeyIds).toContain(x.kid);
   });
 
   // The operator pins its current key N and supplies the /v1/verification-keys
-  // document it fetched itself, where N retired C; C is distrusted.
+  // document it fetched itself, where C was the genesis and N retired it; C is
+  // distrusted.
+  const genesis = statement('genesis', c, { signers: [c], activatedAt: T0 });
   const n = makeKey();
   const rot = statement('succession', n, { endorser: c, signers: [c, n], activatedAt: T1 });
   const closure = statement('closure', c, { endorser: n, signers: [n], retiredAt: T1 });
@@ -381,11 +359,8 @@ describe('an honest rotation from a key distrusted after it', () => {
     expect(r.keyTrust.notes).toEqual([expect.objectContaining({ keyId: n.kid, statementId: rot.id })]);
   });
 
-  it('pinned only on the distrusted key, the rotation it signed admits nothing, so entries under the successor fail', () => {
-    const r = run(c, distrustC);
-    expect(r.valid).toBe(false);
-    expect(r.brokenAt).toMatchObject({ position: 1, code: 'CHAIN_SIGNING_KEY_UNANCHORED' });
-    expect(r.keyTrust.unanchoredKeyIds).toContain(n.kid);
+  it('pinned only on the distrusted key, is refused: pin its successor', () => {
+    expect(() => run(c, distrustC)).toThrow(/both a trust anchor and a distrusted key/);
   });
 });
 

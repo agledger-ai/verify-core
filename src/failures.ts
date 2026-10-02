@@ -230,7 +230,7 @@ const SUGGESTIONS: Record<FailureCode, string> = {
   KEY_STATEMENT_INVALID:
     'A key statement does not verify, disagrees with the columns it was stored under, touches no anchored key, or was signed by a key after its closure or after the key was already admitted. It admits nothing. One that does not verify, or that a key signed after its closure, is what a writer with database access or a leaked retired key produces: have the operator retire that key with force and add it to VAULT_DISTRUSTED_KEYS, and pass the same entry as distrustedKeys.',
   KEY_CLOSURE_INVALID:
-    'A key is retired with no closure that counts for it, or a closure is signed by a key the walk does not anchor, by a key after its own retirement, or dates a retirement before its subject was activated. A closure that still counts ends its subject\'s window whoever wrote it; if its signer leaked, have the operator add it to VAULT_DISTRUSTED_KEYS and pass the same entry as distrustedKeys.',
+    'A key is retired with no closure that counts for it, or a closure is signed by a key the walk does not anchor, by a key after its own retirement, or dates a retirement before its subject was activated, or is signed by a key the walk reaches but does not anchor and retires an anchored key earlier, or with force, than any closure a published key signed (so a walk over the published key documents reads that key differently). A closure that still counts ends its subject\'s window whoever wrote it; if its signer leaked, have the operator add it to VAULT_DISTRUSTED_KEYS and pass the same entry as distrustedKeys.',
 };
 
 /** The actionable next step for a failure code. */

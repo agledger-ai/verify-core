@@ -321,6 +321,40 @@ describe('a leaked key', () => {
     }
   });
 
+  describe('a closure by a key reached but not anchored is a finding only where the published closures read its subject differently', () => {
+    const A = '2026-09-02T06:00:00.000000Z';
+    const B = '2026-09-02T12:00:00.000000Z';
+    const C = '2026-09-02T18:00:00.000000Z';
+    interface Closure { retiredAt: string; forced?: true }
+    const cases: Array<[string, Closure[], Closure, boolean]> = [
+      ['dates it earlier than the one published closure', [{ retiredAt: C }], { retiredAt: B }, true],
+      ['dates it as the published closure does', [{ retiredAt: B }], { retiredAt: B }, false],
+      ['dates it later than the published closure', [{ retiredAt: B }], { retiredAt: C }, false],
+      ['dates it between two published closures', [{ retiredAt: C }, { retiredAt: A }], { retiredAt: B }, false],
+      ['dates it earlier than both published closures', [{ retiredAt: C }, { retiredAt: B }], { retiredAt: A }, true],
+      ['forces it where no published closure does', [{ retiredAt: B }], { retiredAt: B, forced: true }, true],
+      ['forces it as a published closure does', [{ retiredAt: B, forced: true }], { retiredAt: B, forced: true }, false],
+      ['forces it as one of two published closures does', [{ retiredAt: B }, { retiredAt: B, forced: true }], { retiredAt: B, forced: true }, false],
+    ];
+    it.each(cases)('%s', (_name, byN, byX, expected) => {
+      const { c, n, genesis, succ } = history();
+      const x = makeKey();
+      const fromN = byN.map((cl, i) => statement('closure', c, { endorser: n, signers: [n], ...cl, createdAt: `2026-09-03T0${i}:00:00.000000Z` }));
+      const leak = statement('succession', x, { endorser: c, signers: [c, x], activatedAt: T3, createdAt: T3 });
+      const fromX = statement('closure', c, { endorser: x, signers: [x], ...byX, createdAt: '2026-09-05T00:00:00.000000Z' });
+      const trust = walk([], [genesis, succ, ...fromN, leak, fromX], [n.digest]);
+      expect(trust.trusted.has(c.digest)).toBe(true);
+      expect(trust.trusted.has(x.digest)).toBe(false);
+      const onX = trust.findings.filter((f) => f.statementId === fromX.id);
+      expect(onX.map((f) => f.code)).toEqual(expected ? ['KEY_CLOSURE_INVALID'] : []);
+      if (expected) {
+        expect(onX[0]!.detail).toContain('reached but not anchored');
+        expect(onX[0]!.detail).toContain(`pin sha256:${x.digest} in trustAnchors`);
+        expect(onX[0]!.detail).toContain(`distrustedKeys sha256:${x.digest}@${fromX.createdAt}`);
+      }
+    });
+  });
+
   it('cannot admit a key by signing it in as its own predecessor, retired or not', () => {
     const { c, n, genesis, succ } = history();
     const x = makeKey();
