@@ -155,6 +155,7 @@ export function statement(
     kind: typ,
     subjectKeyId: subject.kid,
     endorserKeyId: opts.endorser?.kid ?? null,
+    source: 'dump',
     cose: opts.signers.map((k) => signStatement(bytes, k)),
     createdAt: ms(opts.createdAt ?? T1),
     digest: createHash('sha256').update(bytes).digest('hex'),

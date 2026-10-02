@@ -820,6 +820,54 @@ describe('a walk over a key document that publishes write order', () => {
   });
 });
 
+describe('the source a statement is read from', () => {
+  // C is pinned and distrusted from T1; C's leaked half admits X with a write
+  // time before the cutoff.
+  const c = makeKey();
+  const x = makeKey();
+  const genesis = statement('genesis', c, { signers: [c], activatedAt: T0, createdAt: T0 });
+  const succ = statement('succession', x, { endorser: c, signers: [c, x], activatedAt: T2, createdAt: '2026-09-01T12:00:00.000000Z' });
+  const base = { keys: [row(c, T0)], trustAnchors: [`sha256:${c.digest}`], distrustedKeys: [`sha256:${c.digest}@${T1}`] };
+
+  it('a dump row is held to its created_at against a distrusted key\'s cutoff, as the engine holds it', () => {
+    expect(computeKeyTrust({ ...base, statements: [genesis, succ] }).trusted.has(x.digest)).toBe(true);
+  });
+
+  it('a key document\'s statement, or one that names no source, never keeps an edge out of a distrusted key', () => {
+    for (const source of ['document', undefined] as const) {
+      const statements = [genesis, succ].map(({ source: _s, endorserKeyId: _e, ...st }) => ({ ...st, ...(source ? { source } : {}) }));
+      const trust = computeKeyTrust({ ...base, statements });
+      expect(trust.order).toBe('written');
+      expect(trust.trusted.has(x.digest)).toBe(false);
+      expect(trust.findings).toContainEqual(expect.objectContaining({ code: 'KEY_STATEMENT_INVALID', statementId: succ.id }));
+    }
+  });
+});
+
+describe('a statement\'s createdAt', () => {
+  it('that is not strict RFC 3339 cannot be placed, and is KEY_STATEMENT_INVALID', () => {
+    const c = makeKey();
+    const n = makeKey();
+    const genesis = statement('genesis', c, { signers: [c], activatedAt: T0, createdAt: T0 });
+    for (const odd of ['2026-09-01T00:00:00', '2026-09-01 00:00:00.000000Z', '1', '2026-02-30T00:00:00.000000Z']) {
+      const succ = { ...statement('succession', n, { endorser: c, signers: [c, n], activatedAt: T1 }), createdAt: odd };
+      const trust = walk([], [genesis, succ], [c.digest]);
+      expect(anchoredKids(trust), odd).toEqual([c.kid]);
+      expect(codes(trust), odd).toEqual([['KEY_STATEMENT_INVALID', succ.id]]);
+    }
+  });
+
+  it('names one row however it spells the instant or the id', () => {
+    const c = makeKey();
+    const n = makeKey();
+    const succ = { ...statement('succession', n, { endorser: c, signers: [c, n], activatedAt: T1 }), id: '0aa0b0c0-0000-4000-8000-00000000abcd', createdAt: '2026-09-02T00:00:00.000123Z' };
+    const respelled = { ...succ, id: succ.id.toUpperCase(), createdAt: '2026-09-02T02:00:00.000123+02:00' };
+    const keys = [{ keyId: c.kid, publicKey: c.publicKey }];
+    // Read twice, it is still n's sole admission, so the edge back to c holds.
+    expect(anchoredKids(walk(keys, [succ, respelled], [n.digest]))).toEqual([c.kid, n.kid].sort());
+  });
+});
+
 describe('trustAnchors and distrustedKeys parsing', () => {
   it('trustAnchors takes sha256:<64 hex> entries and refuses anything else by name', () => {
     const d = 'a'.repeat(64);

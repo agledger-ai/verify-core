@@ -316,7 +316,7 @@ describe('the checkpoint rule and its helpers', () => {
   });
 
   it('a row with no readable time, once signing began, fails closed rather than reading as early history', () => {
-    for (const blank of [undefined, null, '', 'garbage', 7]) {
+    for (const blank of [undefined, null, '', 'garbage', 7, '2026-09-01T00:00:00', '2026-02-30T00:00:00.000000Z']) {
       expect(writtenWhileSigning(blank, window.activatedAt)).toBe(true);
     }
   });

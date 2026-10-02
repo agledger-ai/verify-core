@@ -62,6 +62,21 @@ describe('an entry with no readable createdAt fails closed (CHAIN_MALFORMED_ENTR
     }
   });
 
+  it('a createdAt that is not strict RFC 3339 is no readable time, however the host would parse it', () => {
+    // No offset (read in the host's zone), a space, a bare number, an impossible day.
+    for (const odd of ['2026-09-01T00:00:00', '2026-09-01 00:00:00.000000Z', '1', '2026-02-30T00:00:00.000000Z', '2026-09-01T24:00:00Z']) {
+      const exp = load('export/valid.json');
+      exp.entries[1]!.createdAt = odd;
+      const r = verifyAuditExport(exp);
+      expect(r.brokenAt, odd).toMatchObject({ position: 2, code: 'CHAIN_MALFORMED_ENTRY' });
+    }
+    // An offset other than Z is RFC 3339, and places the entry where it says.
+    const exp = load('export/valid.json');
+    const at = new Date(Date.parse(exp.entries[1]!.createdAt!) + 2 * 3_600_000).toISOString().slice(0, 23);
+    exp.entries[1]!.createdAt = `${at}+02:00`;
+    expect(verifyAuditExport(exp).valid).toBe(true);
+  });
+
   it('fails the same way unpinned, wherever the key carries a window', () => {
     const exp = load('export/valid.json');
     exp.entries[2]!.createdAt = null;

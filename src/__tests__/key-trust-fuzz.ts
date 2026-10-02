@@ -177,6 +177,7 @@ export function portInput(sc: FuzzScenario): ComputeKeyTrustInput {
       kind: s.kind,
       subjectKeyId: POOL[s.subject]!.kid,
       endorserKeyId: s.endorser === null ? null : POOL[s.endorser]!.kid,
+      source: 'dump' as const,
       cose: s.cose,
       createdAt: new Date(s.createdMs).toISOString(),
     })),
