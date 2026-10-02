@@ -114,7 +114,9 @@ describe('verifyAuditExport with trustAnchors', () => {
 
   it('a key distrusted from an instant and never retired fails what it wrote after, worded as the distrust cutoff', () => {
     const exp = load('valid.json');
-    const cutoff = '2026-09-30T22:06:08.770000Z';
+    // Between the first entry and the second, at microsecond precision.
+    const between = (Date.parse(exp.entries[0]!.createdAt!) + Date.parse(exp.entries[1]!.createdAt!)) / 2;
+    const cutoff = `${new Date(Math.floor(between)).toISOString().slice(0, 23)}000Z`;
     const r = verifyAuditExport(exp, { trustAnchors: [pinOf(exp)], distrustedKeys: [`${pinOf(exp)}@${cutoff}`] });
     const keyId = exp.entries[1]!.integrity.signingKeyId!;
     expect(r.entries[0]!.valid).toBe(true);
@@ -174,8 +176,8 @@ describe('verifyAuditExport with trustAnchors', () => {
   });
 
   it('pinned, unsigned entries written after the anchored key\'s signed activation fail CHAIN_ENTRY_UNSIGNED with the windows stripped', () => {
-    const { exp, pin } = unsignedWithAnchoredKey();
-    for (const e of exp.entries) e.createdAt = '2026-09-30T23:00:00.000Z';
+    const { exp, pin, activatedAt } = unsignedWithAnchoredKey();
+    for (const e of exp.entries) e.createdAt = new Date(Date.parse(activatedAt) + 3_600_000).toISOString();
     const signed = load('valid.json');
     const withWindows = structuredClone(exp);
     withWindows.exportMetadata.signingKeyWindows = signed.exportMetadata.signingKeyWindows!;

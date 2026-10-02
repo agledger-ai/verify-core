@@ -57,7 +57,8 @@ entrypoints. Together they are one corpus.
       "options": {                          // optional verify options for this vector
         "keysFile": "export/keys-oob.json", // out-of-band publicKeys to load
         "requireKeyId": "vault-key-1",
-        "requireOutOfBandKeys": true
+        "requireSuppliedKeys": true,
+        "trustAnchors": ["sha256:<64 hex>"] // pinned anchors for the walk
       },
       "expectSignatureCoverage": { "signed": 0, "unsigned": 3, "skipped": 0 }, // optional assertion
       "note": "human description of what is tampered and why it must fail"
@@ -114,8 +115,8 @@ const r = verifyAuditExport(exportJson, { publicKeys?, requireKeyId?, requireSup
 // verifyChain(entries, keyRegistry, opts) per chain.
 ```
 
-The manifest's `options.requireOutOfBandKeys` is the engine's name for
-`requireSuppliedKeys`; `options.trustAnchors` maps to `trustAnchors`.
+The manifest's `options.requireSuppliedKeys` and `options.trustAnchors` map to
+the options of the same name.
 
 `NormalizedEntry` optional fields drive the input-gated checks:
 `binding{recordId,entryType,payload}` -> CHAIN_PAYLOAD_BINDING_MISMATCH;
@@ -137,7 +138,7 @@ canonicalization vector), `CHAIN_EMPTY`. Plus policy/compound: a valid chain tha
 `fail`s `CHAIN_KEY_POLICY_VIOLATION` under `requireKeyId`; a key-substitution
 fixture (tampered entry re-signed with the attacker key, attacker key present in
 embedded set) that PASSES with no options (documents the embedded-key trust
-assumption) and FAILs `CHAIN_KEY_POLICY_VIOLATION` under `requireOutOfBandKeys`;
+assumption) and FAILs `CHAIN_KEY_POLICY_VIOLATION` under `requireSuppliedKeys`;
 an unsigned chain (all-zero 64-byte sig) that PASSES with
 `expectSignatureCoverage {signed:0, unsigned:N}` (proves unsigned is reported as
 hash-chain-only, never as cryptographically signed).

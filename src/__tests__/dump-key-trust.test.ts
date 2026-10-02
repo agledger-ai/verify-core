@@ -125,11 +125,9 @@ describe('key-statement walk over the dump corpus: vectors that pin trustAnchors
 });
 
 describe('key-statement walk over the dump corpus: pass vectors pinned on the Server\'s current key', () => {
-  // Every pass vector whose registry columns are the engine's own. The
-  // column-edit vector valid-rotation-boundary is left out: its activated_at
-  // column was moved off the signed value, which the walk reports as
-  // CHAIN_KEY_WINDOW_DRIFT (see the test below).
-  const vectors = ['dump/valid', 'dump/valid-es256', 'dump/valid-identity', 'dump/valid-unsigned-history-then-signed'];
+  // Every pass vector whose registry columns are the engine's own, the
+  // rotation boundary included: it re-signs the window it tests.
+  const vectors = ['dump/valid', 'dump/valid-es256', 'dump/valid-identity', 'dump/valid-unsigned-history-then-signed', 'dump/valid-rotation-boundary'];
 
   it.each(vectors)('%s verifies clean with every signed entry anchored', (dir) => {
     const { codes, chains } = gradeDump(dir, [currentPin(dir)]);
@@ -156,13 +154,13 @@ describe('key-statement walk over the dump corpus: pass vectors pinned on the Se
     expect(codes).toContain('CHAIN_SIGNING_KEY_UNANCHORED');
   });
 
-  it('the registry column edits read as drift from the signed window, not as the key-window codes their manifest names', () => {
-    // These vectors move a vault_signing_keys column and leave the statements
-    // alone. Entries are graded against the signed window, so the column is
-    // drift; the manifest still expects the pre-statement verdicts.
-    expect(gradeDump('dump/valid-rotation-boundary', [currentPin('dump/valid-rotation-boundary')]).codes).toEqual(['CHAIN_KEY_WINDOW_DRIFT']);
-    expect(gradeDump('dump/chain-key-not-yet-active', [currentPin('dump/chain-key-not-yet-active')]).codes).toEqual(['CHAIN_KEY_WINDOW_DRIFT']);
-    // A retired row no closure signs is the engine's key_closure_invalid.
-    expect(gradeDump('dump/chain-key-expired', [currentPin('dump/chain-key-expired')]).codes).toEqual(['KEY_CLOSURE_INVALID']);
+  it('the key-window vectors sign the window they test, so the walk grades them with the code their manifest names', () => {
+    // chain-key-expired's current key is the successor whose closure retires
+    // the vault key, so the pin is the vault key, as the manifest gives it.
+    for (const [dir, code] of [['dump/chain-key-not-yet-active', 'CHAIN_KEY_NOT_YET_ACTIVE'], ['dump/chain-key-expired', 'CHAIN_KEY_EXPIRED']] as const) {
+      const pin = manifest.vectors.find((v) => v.file === dir)!.options!.trustAnchors!;
+      const { codes } = gradeDump(dir, pin);
+      expect(new Set(codes)).toEqual(new Set([code]));
+    }
   });
 });

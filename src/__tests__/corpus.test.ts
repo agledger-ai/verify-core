@@ -42,7 +42,8 @@ interface ManifestVector {
   options?: {
     keysFile?: string;
     requireKeyId?: string;
-    requireOutOfBandKeys?: boolean;
+    requireSuppliedKeys?: boolean;
+    trustAnchors?: string[];
     /**
      * A JSON array of agent cert public keys (JWKs). Unmapped, a vector that
      * expects `CHAIN_AGENT_SIGNATURE_INVALID` runs with no agent keys, the
@@ -82,8 +83,8 @@ describe('verify-core conformance corpus (export kind)', () => {
         options.publicKeys = loadJson<Record<string, string>>(vector.options.keysFile);
       }
       if (vector.options?.requireKeyId) options.requireKeyId = vector.options.requireKeyId;
-      // The manifest keeps the engine's pre-2.0 option name.
-      if (vector.options?.requireOutOfBandKeys) options.requireSuppliedKeys = true;
+      if (vector.options?.requireSuppliedKeys) options.requireSuppliedKeys = true;
+      if (vector.options?.trustAnchors) options.trustAnchors = vector.options.trustAnchors;
       if (vector.options?.agentKeysFile) {
         options.agentKeys = loadJson<AgentPublicKeyJwk[]>(vector.options.agentKeysFile);
       }
