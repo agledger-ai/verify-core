@@ -839,7 +839,10 @@ describe('the source a statement is read from', () => {
       const trust = computeKeyTrust({ ...base, statements });
       expect(trust.order).toBe('written');
       expect(trust.trusted.has(x.digest)).toBe(false);
-      expect(trust.findings).toContainEqual(expect.objectContaining({ code: 'KEY_STATEMENT_INVALID', statementId: succ.id }));
+      // Its time is before the cutoff, where the engine would count it: voided
+      // here only by the source rule, it is a note, not a finding.
+      expect(trust.findings).toEqual([]);
+      expect(trust.notes).toEqual([expect.objectContaining({ keyId: x.kid, statementId: succ.id })]);
     }
   });
 });

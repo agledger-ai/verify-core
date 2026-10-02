@@ -338,7 +338,7 @@ export function earliestKeyActivation(
   let earliest: { at: number; iso: string } | null = null;
   for (const k of keys) {
     if (typeof k.activatedAt !== 'string') continue;
-    const at = Date.parse(k.activatedAt);
+    const at = instantMs(k.activatedAt);
     if (Number.isNaN(at)) continue;
     if (earliest === null || at < earliest.at) earliest = { at, iso: k.activatedAt };
   }
@@ -363,7 +363,7 @@ export function writtenWhileSigning(
   signingSince: string | null | undefined,
 ): boolean {
   if (typeof signingSince !== 'string') return false;
-  const since = Date.parse(signingSince);
+  const since = instantMs(signingSince);
   if (Number.isNaN(since)) return false;
   const written = typeof writtenAt === 'string' ? rfc3339Ms(writtenAt) : Number.NaN;
   if (Number.isNaN(written)) return true;
@@ -443,8 +443,8 @@ export function verifyChain(
     signingSince = earliestKeyActivation(keys.values());
   } else {
     signingSince = options.signingSince;
-    if (signingSince !== null && Number.isNaN(Date.parse(signingSince))) {
-      throw new TypeError(`signingSince must be an ISO-8601 time or null (got ${JSON.stringify(signingSince)}).`);
+    if (signingSince !== null && Number.isNaN(instantMs(signingSince))) {
+      throw new TypeError(`signingSince must be an RFC 3339 instant or null (got ${JSON.stringify(signingSince)}).`);
     }
   }
   const mustSign: MustSign = { signedBefore: false, signingSince };
@@ -879,6 +879,18 @@ function verifyEntry(
   // placed inside the window, and fails closed rather than skipping it.
   if (typeof key.activatedAt === 'string' || typeof key.retiredAt === 'string' || typeof key.distrustCutoff === 'string') {
     optionalChecks.key_temporal = 'applied';
+    // A window edge that is not RFC 3339 cannot place anything either, and
+    // the check fails closed on it rather than skipping that edge.
+    for (const [edge, value] of [['activatedAt', key.activatedAt], ['retiredAt', key.retiredAt], ['distrustCutoff', key.distrustCutoff]] as const) {
+      if (typeof value === 'string' && !isInstant(value)) {
+        return fail(
+          scopeId,
+          expectedPosition,
+          'CHAIN_MALFORMED_ENTRY',
+          `Key ${entry.signingKeyId}'s ${edge} ${JSON.stringify(value)} is not an RFC 3339 instant, so the entry cannot be placed inside its window.`,
+        );
+      }
+    }
     if (!isInstant(entry.createdAt)) {
       return fail(
         scopeId,

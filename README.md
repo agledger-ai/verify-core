@@ -184,14 +184,26 @@ to the signed order.
 `createdAt` is not signed: whoever holds an export or a key document can edit
 it, as they can reorder the document, with nothing offline to tell. So a
 document's write order is never held against `distrustedKeys`. On any
-statement from an export or a supplied key document, in either order, every
-edge out of a distrusted key is void whatever time it carries, and the
-closures it signed still count. That is narrower than the engine, which holds
-the key to the time its statements were really stored, and never wider. Only
+statement from an export or a supplied key document, in either order, an edge
+out of a distrusted key never admits a key or keeps one reachable, whatever
+time it carries. Such a statement still counts for everything that can only
+narrow trust: it dates its subject's window, cuts the subject's edge back as a
+later admission, and a closure the key signed still ends a window. Where the
+document dates it before the cutoff, so the engine would count it, it is no
+finding: it is listed in `keyTrust.notes`, which never fails a verdict, and an
+honest rotation away from the key passes when you pin its successor. Pinned
+only on the distrusted key, its successor is not anchored. This is narrower
+than the engine, which holds the key to the time its statements were really
+stored, and never wider. Only
 a dump walk holds a distrusted key's statements to their `created_at`, as the
 engine does, and that adds assurance only for a dump you took from the Server
 yourself or over a channel you trust; for any other dump it assures no more
 than the stored times its holder chose.
+
+An entry's `createdAt` is not signed either, so the holder of a leaked
+distrusted key can still sign entries dated before its cutoff, and no offline
+verifier can tell those from the history the key wrote inside its legitimate
+window.
 
 Without `distrustedKeys`, a key retired without `force` whose private half
 later leaks can still admit a key on any walk: with a statement it dates
