@@ -64,7 +64,7 @@ import {
   verifySignatureBytes,
   type KeyAlgorithm,
 } from './primitives.js';
-import { instantMs, instantUs } from './instant.js';
+import { instantMs, instantUs, rfc3339Ms } from './instant.js';
 import type { KeyRegistry, KeyTrustState, VerificationKey } from './chain.js';
 
 /** Content type of a key statement's COSE_Sign1 (protected header label 3). */
@@ -119,6 +119,15 @@ export interface KeyStatementInput {
    * the key documents do not.
    */
   endorserKeyId?: string | null;
+  /**
+   * Where the statement was read from. `dump`: a row of a dump's
+   * `vault_key_statements.ndjson` ({@link keyStatementFromDumpRow} sets it),
+   * whose `created_at` the walk holds a distrusted key's statements to, as the
+   * engine does. Anything else, absent included, is a key document's (an
+   * export's or a supplied `/v1/verification-keys` entry's): its `createdAt`
+   * orders it but never keeps an edge out of a distrusted key.
+   */
+  source?: 'dump' | 'document';
   /** The COSE_Sign1 signatures, base64 or bytes, in signing order. */
   cose: ReadonlyArray<string | Uint8Array>;
   /**
@@ -127,9 +136,10 @@ export interface KeyStatementInput {
    * applies the write order, without it the signed order (see the module
    * comment). Statements are ordered by it at the precision given, then, for
    * two at the same microsecond, by `id`, and otherwise in input order. Under
-   * the write order a statement whose `createdAt` is not an RFC 3339 instant
-   * cannot be placed, and is KEY_STATEMENT_INVALID (the adapters give `''`
-   * for a row or document statement without one).
+   * the write order a statement whose `createdAt` is not a strict RFC 3339
+   * instant (a `T`, an offset or `Z`, a real calendar date) cannot be placed,
+   * and is KEY_STATEMENT_INVALID (the adapters give `''` for a row or
+   * document statement without one).
    */
   createdAt?: string;
 }
@@ -665,7 +675,10 @@ export function computeKeyTrust(input: ComputeKeyTrustInput): KeyTrust {
       return b === null ? `?${String(c)}` : Buffer.from(b).toString('base64');
     }).join('|');
     if (order === 'written' && typeof s.id !== 'string') return true;
-    const key = order === 'written' ? JSON.stringify([s.id, s.createdAt, bytes]) : bytes;
+    // The same row however its time and id are spelled: `Z` or `+00:00`, a
+    // uuid in either case.
+    const at = instantUs(s.createdAt ?? '');
+    const key = order === 'written' ? JSON.stringify([s.id.toLowerCase(), Number.isNaN(at.us) ? s.createdAt : at.us, bytes]) : bytes;
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
@@ -694,7 +707,7 @@ export function computeKeyTrust(input: ComputeKeyTrustInput): KeyTrust {
   // the Server writes one on every row, so it was edited, and it admits nothing.
   const checked = statementInputs.map((st) => {
     const c = checkKeyStatement(st, keyByDigest);
-    if (order !== 'written' || !Number.isNaN(instantMs(st.createdAt!))) return c;
+    if (order !== 'written' || !Number.isNaN(rfc3339Ms(st.createdAt!))) return c;
     return { ...c, verdict: 'invalid' as const, detail: 'the row has no parseable created_at to order it by' };
   });
   // Under the write order: `createdAt` at the precision given, then `id` for
@@ -734,7 +747,7 @@ export function computeKeyTrust(input: ComputeKeyTrustInput): KeyTrust {
       subject: c.payload.subject.spkiSha256,
       endorser: c.payload.endorser?.spkiSha256 ?? null,
       at,
-      storedMs: instantMs(typeof k === 'number' ? c.input.createdAt! : k),
+      storedMs: typeof k === 'number' ? rfc3339Ms(c.input.createdAt!) : instantMs(k),
     }]);
   const valid = inWriteOrder.filter((s) => s.check.verdict === 'valid');
 
@@ -785,15 +798,18 @@ export function computeKeyTrust(input: ComputeKeyTrustInput): KeyTrust {
   }
   /**
    * Signed by a distrusted key at or after its cutoff: counts for nothing.
-   * Under the signed order there is no write time to hold a statement to, and
-   * the instant it signs is the leaked key's own word. So every edge out of a
-   * distrusted key is void whatever it signs, and every closure it signed
-   * still counts: dropping an edge or keeping a closure only ever takes trust
-   * away. Narrower than the engine, never wider.
+   * Only a dump row's write time is held against the cutoff, and only as far
+   * as the dump came from the Server. A key document's `createdAt` is the
+   * word of whoever holds the file, and under the signed order the instant a
+   * statement signs is the leaked key's own word. So for any statement that
+   * is not a dump row, every edge out of a distrusted key is void whatever
+   * time it carries, and every closure it signed still counts: dropping an
+   * edge or keeping a closure only ever takes trust away. Narrower than the
+   * engine, never wider. The write order still orders such statements.
    */
   const distrusted = (s: Statement, signer: string | null): boolean => {
     if (signer === null || !cutoffs.has(signer)) return false;
-    if (order === 'signed') return s.payload.typ !== 'closure';
+    if (order === 'signed' || s.check.input.source !== 'dump') return s.payload.typ !== 'closure';
     const cutoff = cutoffs.get(signer);
     return cutoff === null || cutoff === undefined || s.storedMs >= cutoff.at;
   };
@@ -1006,6 +1022,7 @@ export function keyStatementFromDumpRow(row: DumpKeyStatementRow): KeyStatementI
     endorserKeyId: row.endorser_key_id,
     cose: Array.isArray(row.statement) ? row.statement : [],
     createdAt: typeof row.created_at === 'string' ? row.created_at : '',
+    source: 'dump',
   };
 }
 
@@ -1073,6 +1090,7 @@ export function statementsFromMap(byKey: Iterable<[string, unknown]>, source: st
         id,
         kind: r['kind'],
         subjectKeyId: keyId,
+        source: 'document',
         cose: r['cose'] as string[],
         ...(timed ? { createdAt: typeof createdAt === 'string' ? createdAt : '' } : {}),
       });

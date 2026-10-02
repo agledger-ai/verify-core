@@ -159,38 +159,46 @@ Statements are walked in the order the Server's database stored them,
 `createdAt` then the row `id`, never by an instant a statement signs. A dump
 carries that order (`created_at`), and so does every key document an API 2.0
 Server serves: each statement in an export's `signingKeyStatements`,
-`/v1/verification-keys` and
-`/.well-known/agledger-vault-keys.json` carries its row `id` and `createdAt` at
-microsecond precision, and `keyTrust.order` reads `written`. Such a document
-lists under a trusted key its admission, every later admission it signed, and
-the closures that count for it, so a walk over it dates each window and cuts
-each edge back as the engine does. Where it cannot (a later succession whose
-endorser the document does not carry, or a closure by a key it does not
-list), the walk grades the window more loosely than the listed one, and the
-listed `activatedAt` or `retiredAt` reads as `CHAIN_KEY_WINDOW_DRIFT` (a listed
-retirement no closure it could verify signs is `KEY_CLOSURE_INVALID`). A
-statement the export and a supplied key both carry is one row.
+`/v1/verification-keys` and `/.well-known/agledger-vault-keys.json` carries
+its row `id` and `createdAt` at microsecond precision, and `keyTrust.order`
+reads `written`. A `createdAt` that is not strict RFC 3339 (a `T`, an offset
+or `Z`, a real calendar date) places nothing, and its statement is
+`KEY_STATEMENT_INVALID`. Such a document lists under a trusted key its
+admission, every later admission it signed, and the closures that count for
+it, so a walk over it dates each window and cuts each edge back as the engine
+does. Where it cannot (a later succession whose endorser the document does not
+carry, or a closure by a key it does not list), the walk grades the window
+more loosely than the listed one, and the listed `activatedAt` or `retiredAt`
+reads as `CHAIN_KEY_WINDOW_DRIFT` (a listed retirement no closure it could
+verify signs is `KEY_CLOSURE_INVALID`). A statement the export and a supplied
+key both carry is one row, however its `id` and `createdAt` are spelled.
 
 A document from a Server that published neither field is still read, and
 `keyTrust.order` reads `signed`: statements are ordered by the instant each
-one signs, with a closure after any admission that signs the same instant. For a document the Server served, the
-two orders agree. A key retired without `force` whose private half later leaks
-can date a statement before its retirement, and under the signed order that
-statement counts. A forced retirement voids every edge out of its key under
-either order, and so does `distrustedKeys` on a signed-order walk, whatever
-instant the key signed (its closures still count). When a retired key may have
-leaked, retire it with `force` or list it in `distrustedKeys`. If the export
-and a supplied key document disagree (one carries write times and the other
-does not), a statement the older one alone carries makes the whole walk fall
-back to the signed order.
+one signs, with a closure after any admission that signs the same instant. For
+a document the Server served, the two orders agree. If the export and a
+supplied key document disagree (one carries write times and the other does
+not), a statement the older one alone carries makes the whole walk fall back
+to the signed order.
 
-Write order holds a leaked key to the time its statement was really stored
-only for a dump or document the Server wrote: `createdAt` is not signed, and
-whoever hands you one can edit it as easily as reorder it, with nothing
-offline to tell. So the write order adds assurance for an artifact you took
-from the Server yourself, or over a channel you trust. For any other it assures
-no more than the signed order, and `force` or `distrustedKeys` is what closes
-the gap.
+`createdAt` is not signed: whoever holds an export or a key document can edit
+it, as they can reorder the document, with nothing offline to tell. So a
+document's write order is never held against `distrustedKeys`. On any
+statement from an export or a supplied key document, in either order, every
+edge out of a distrusted key is void whatever time it carries, and the
+closures it signed still count. That is narrower than the engine, which holds
+the key to the time its statements were really stored, and never wider. Only
+a dump walk holds a distrusted key's statements to their `created_at`, as the
+engine does, and that adds assurance only for a dump you took from the Server
+yourself or over a channel you trust; for any other dump it assures no more
+than the stored times its holder chose.
+
+Without `distrustedKeys`, a key retired without `force` whose private half
+later leaks can still admit a key on any walk: with a statement it dates
+before its retirement under the signed order, or with an edited `createdAt`
+under the write order. A forced retirement voids every edge out of its key
+under either order. When a retired key may have leaked, retire it with
+`force` or list it in `distrustedKeys`.
 
 ### Walking a dump or a key document
 

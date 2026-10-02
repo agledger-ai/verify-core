@@ -56,7 +56,7 @@ import {
   type AgentPublicKeyJwk,
 } from './primitives.js';
 import type { FailureCode } from './failures.js';
-import { instantMs } from './instant.js';
+import { instantMs, rfc3339Ms } from './instant.js';
 
 /**
  * Where a verification key came from. `supplied`: the caller passed it (from
@@ -354,7 +354,7 @@ export function earliestKeyActivation(
  *
  * False when `signingSince` is absent or unparseable: with no instant from
  * which the install signs, nothing has to be signed. True when `signingSince`
- * is known and `writtenAt` is missing or unparseable: the engine times every
+ * is known and `writtenAt` is missing or not strict RFC 3339: the engine times every
  * row, so a row with no readable time was edited, and it cannot be placed
  * before signing began. It fails closed rather than reading as early history.
  */
@@ -365,14 +365,14 @@ export function writtenWhileSigning(
   if (typeof signingSince !== 'string') return false;
   const since = Date.parse(signingSince);
   if (Number.isNaN(since)) return false;
-  const written = typeof writtenAt === 'string' ? Date.parse(writtenAt) : Number.NaN;
+  const written = typeof writtenAt === 'string' ? rfc3339Ms(writtenAt) : Number.NaN;
   if (Number.isNaN(written)) return true;
   return written >= since;
 }
 
-/** Whether `value` is an RFC 3339 instant the walk can place. */
+/** Whether `value` is a strict RFC 3339 instant the walk can place. */
 function isInstant(value: unknown): value is string {
-  return typeof value === 'string' && !Number.isNaN(instantMs(value));
+  return typeof value === 'string' && !Number.isNaN(rfc3339Ms(value));
 }
 
 /**
@@ -995,7 +995,7 @@ function temporalKeyFailure(
   createdAt: string,
   key: VerificationKey,
 ): { code: 'CHAIN_KEY_NOT_YET_ACTIVE' | 'CHAIN_KEY_EXPIRED'; detail: string } | null {
-  const written = instantMs(createdAt);
+  const written = rfc3339Ms(createdAt);
   if (Number.isNaN(written)) return null;
   if (typeof key.activatedAt === 'string' && key.activatedAt) {
     const activated = instantMs(key.activatedAt);

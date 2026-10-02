@@ -1,9 +1,11 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
+import { createHash, sign } from 'node:crypto';
 import { dirname, join } from 'node:path';
+import { decode as cborDecode, encode as cborEncode, rfc8949EncodeOptions } from 'cborg';
 import { fileURLToPath } from 'node:url';
 import { verifyAuditExport, type RecordAuditExportInput } from '../audit-export.js';
-import { makeKey, statement } from './key-statements-helpers.js';
+import { T0, T1, T2, makeKey, statement, type Stored, type TestKey } from './key-statements-helpers.js';
 
 /**
  * trustAnchors on the export path, over the corpus's real exports: the
@@ -235,5 +237,108 @@ describe('verifyAuditExport with trustAnchors', () => {
     const r = verifyAuditExport(load('unsigned.json'), { trustAnchors: [STRANGER] });
     expect(r.valid).toBe(true);
     expect(r.signatureCoverage.skipped).toBe(3);
+  });
+});
+
+/**
+ * valid.json with every entry re-signed under `key` and the chain relinked:
+ * what the holder of a leaked key that admitted `key` can produce.
+ */
+function resignedUnder(key: TestKey): RecordAuditExportInput {
+  const exp = load('valid.json');
+  const priv = { key: Buffer.from(key.privateKey, 'base64'), format: 'der' as const, type: 'pkcs8' as const };
+  let prev: Buffer | null = null;
+  for (const e of exp.entries) {
+    const [prot0, , payload] = cborDecode(Buffer.from(e.integrity.coseSign1, 'base64').subarray(1), { useMaps: true }) as [Uint8Array, unknown, Uint8Array];
+    const header = cborDecode(prot0, { useMaps: true }) as Map<number, unknown>;
+    header.set(4, Uint8Array.from(Buffer.from(key.kid, 'hex')));
+    (header.get(-65537) as Map<number, unknown>).set(2, prev === null ? null : Uint8Array.from(prev));
+    const prot = cborEncode(header, rfc8949EncodeOptions);
+    const sig = sign(null, cborEncode(['Signature1', prot, new Uint8Array(0), payload], rfc8949EncodeOptions), priv);
+    const envelope = Buffer.concat([Buffer.from([0xd2]), Buffer.from(cborEncode([prot, new Map(), payload, Uint8Array.from(sig)], rfc8949EncodeOptions))]);
+    const hash = createHash('sha256').update(envelope).digest();
+    e.integrity.coseSign1 = envelope.toString('base64');
+    e.integrity.payloadHash = hash.toString('hex');
+    e.integrity.previousHash = prev === null ? null : prev.toString('hex');
+    e.integrity.signingKeyId = key.kid;
+    prev = hash;
+  }
+  return exp;
+}
+
+const published = (st: Stored, createdAt?: string) => ({
+  ...(createdAt !== undefined ? { id: st.id, createdAt } : {}),
+  kind: st.kind,
+  cose: st.cose.map((b) => Buffer.from(b as Uint8Array).toString('base64')),
+});
+
+describe('a distrusted key\'s edges on the export path, whatever write time the file gives', () => {
+  // C is pinned and distrusted from T1; whoever holds C's leaked half admits X
+  // after that and signs the export under X.
+  const c = makeKey();
+  const x = makeKey();
+  const genesis = statement('genesis', c, { signers: [c], activatedAt: T0 });
+  const succ = statement('succession', x, { endorser: c, signers: [c, x], activatedAt: T2 });
+
+  it.each([
+    ['no write times', undefined],
+    ['a write time forged before the cutoff', '2026-09-01T12:00:00.000000Z'],
+    ['the true write time after the cutoff', '2026-10-02T15:00:00.000000Z'],
+  ])('an export carrying the admission with %s does not anchor the key it admits', (_label, at) => {
+    const exp = resignedUnder(x);
+    const m = exp.exportMetadata;
+    m.signingPublicKeys = { [c.kid]: c.publicKey, [x.kid]: x.publicKey };
+    m.signingKeyWindows = { [c.kid]: { activatedAt: '2026-09-01T00:00:00.000Z', retiredAt: null }, [x.kid]: { activatedAt: '2026-09-03T00:00:00.000Z', retiredAt: null } };
+    m.anchoredFrom = `sha256:${c.digest}`;
+    m.signingKeyStatements = {
+      [c.kid]: [published(genesis, at === undefined ? undefined : '2026-09-01T00:00:00.000000Z')],
+      [x.kid]: [published(succ, at)],
+    };
+    const r = verifyAuditExport(exp, { trustAnchors: [`sha256:${c.digest}`], distrustedKeys: [`sha256:${c.digest}@${T1}`] });
+    expect(r.valid).toBe(false);
+    expect(r.brokenAt).toMatchObject({ position: 1, code: 'CHAIN_SIGNING_KEY_UNANCHORED' });
+    expect(r.keyTrust.unanchoredKeyIds).toContain(x.kid);
+  });
+
+  // The operator pins its current key N and supplies the /v1/verification-keys
+  // document it fetched itself, where N retired C; C is distrusted.
+  const n = makeKey();
+  const rot = statement('succession', n, { endorser: c, signers: [c, n], activatedAt: T1 });
+  const closure = statement('closure', c, { endorser: n, signers: [n], retiredAt: T1 });
+  const late = statement('succession', x, { endorser: c, signers: [c, x], activatedAt: '2026-09-01T06:00:00.000000Z' });
+  const honest = {
+    [c.kid]: [published(genesis, '2026-09-01T00:00:00.000100Z'), published(closure, '2026-09-02T00:00:00.000300Z')],
+    [n.kid]: [published(rot, '2026-09-02T00:00:00.000200Z')],
+  };
+  const supplied = [
+    { keyId: c.kid, publicKey: c.publicKey, activatedAt: '2026-09-01T00:00:00.000Z', retiredAt: '2026-09-02T00:00:00.000Z', statements: honest[c.kid]! },
+    { keyId: n.kid, publicKey: n.publicKey, activatedAt: '2026-09-02T00:00:00.000Z', retiredAt: null, statements: honest[n.kid]! },
+    { keyId: x.kid, publicKey: x.publicKey },
+  ];
+  const withStatements = (statements: Record<string, ReturnType<typeof published>[]>) => {
+    const exp = resignedUnder(x);
+    const m = exp.exportMetadata;
+    m.signingPublicKeys = { [c.kid]: c.publicKey, [n.kid]: n.publicKey, [x.kid]: x.publicKey };
+    m.signingKeyWindows = { [x.kid]: { activatedAt: '2026-09-01T06:00:00.000Z', retiredAt: null } };
+    m.anchoredFrom = `sha256:${n.digest}`;
+    m.signingKeyStatements = statements;
+    return verifyAuditExport(exp, { publicKeys: supplied, trustAnchors: [`sha256:${n.digest}`], distrustedKeys: [`sha256:${c.digest}@2026-09-05T00:00:00Z`] });
+  };
+
+  it.each([
+    ['its true write time', '2026-10-02T15:00:00.000000Z'],
+    ['a write time forged before the closure', '2026-09-01T12:00:00.000000Z'],
+  ])('beside an honest supplied document, an admission only the export carries, with %s, anchors nothing', (_label, at) => {
+    const r = withStatements({ ...honest, [x.kid]: [published(late, at)] });
+    expect(r.brokenAt).toMatchObject({ position: 1, code: 'CHAIN_SIGNING_KEY_UNANCHORED' });
+    expect(r.keyTrust.order).toBe('written');
+    expect(r.keyTrust.anchoredKeyIds).not.toContain(x.kid);
+  });
+
+  it('an export stripped of its write times beside an honest supplied document anchors nothing either', () => {
+    const stripped = Object.fromEntries(Object.entries(honest).map(([k, list]) => [k, list.map(({ kind, cose }) => ({ kind, cose }))]));
+    const r = withStatements({ ...stripped, [x.kid]: [published(late)] });
+    expect(r.keyTrust.order).toBe('signed');
+    expect(r.brokenAt).toMatchObject({ position: 1, code: 'CHAIN_SIGNING_KEY_UNANCHORED' });
   });
 });
