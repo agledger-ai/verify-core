@@ -57,6 +57,7 @@ import {
 } from './primitives.js';
 import type { FailureCode } from './failures.js';
 import { instantMs, rfc3339Ms } from './instant.js';
+import { assertKnownOptions } from './options.js';
 
 /**
  * Where a verification key came from. `supplied`: the caller passed it (from
@@ -402,6 +403,7 @@ export function verifyChain(
   keys: KeyRegistry,
   options: VerifyChainOptions = {},
 ): ChainResult {
+  assertKnownOptions('verifyChain', options, ['requireKeyId', 'requireSuppliedKeys', 'agentKeys', 'signingSince'] satisfies ReadonlyArray<keyof VerifyChainOptions>);
   const scopeId = entries[0]?.scopeId ?? '(empty)';
   const sorted = entries
     .map((entry, at) => ({ entry, at, key: positionKey(entry.chainPosition) }))

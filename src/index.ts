@@ -43,6 +43,7 @@ export {
   KEY_STATEMENT_CTY,
   KEY_STATEMENT_KINDS,
   applyKeyTrust,
+  assertNotPinnedAndDistrusted,
   computeKeyTrust,
   keyStatementFromDumpRow,
   keyStatementsFromExport,
@@ -52,6 +53,7 @@ export {
   reportKeyTrust,
   settleKeyTrust,
   spkiSha256,
+  verdictOf,
   trustKeyFromDumpRow,
 } from './key-statements.js';
 export type {
@@ -70,6 +72,7 @@ export type {
   KeyTrustStatus,
   PublishedKeyStatement,
   TrustKeyInput,
+  Verdict,
   VerificationKeysDocument,
 } from './key-statements.js';
 export { instantMs } from './instant.js';
