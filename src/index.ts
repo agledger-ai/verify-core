@@ -76,6 +76,7 @@ export type {
   VerificationKeysDocument,
 } from './key-statements.js';
 export { instantMs } from './instant.js';
+export { assertKnownOptions } from './options.js';
 
 export {
   sha256Hex,
