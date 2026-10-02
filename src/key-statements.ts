@@ -998,7 +998,12 @@ export function computeKeyTrust(input: ComputeKeyTrustInput): KeyTrust {
         if (earlier || forcedAlone) {
           const effect = earlier ? `ends ${s.payload.subject.kid}'s window at ${retiredAt}` : `retires ${s.payload.subject.kid} with force`;
           const at = typeof s.check.input.createdAt === 'string' ? `@${s.check.input.createdAt}` : '';
-          finding('KEY_CLOSURE_INVALID', s, `the closure is signed by ${by}, which is reached but not anchored, and still counts: it ${effect}, and no key surface publishes ${by}, so an offline walk over the published statements cannot verify it and reads ${s.payload.subject.kid} as the engine does not. If ${by} is honest, pin sha256:${e} in trustAnchors (VAULT_TRUST_ANCHORS on the Server, which publishes it); if it leaked, distrustedKeys sha256:${e}${at} (VAULT_DISTRUSTED_KEYS on the Server) makes this closure, and what ${by} signed after it, count for nothing.`);
+          // A distrusted signer cannot be pinned; on a key document its
+          // closure still counts, since a closure only narrows trust.
+          const remedy = cutoffs.has(e)
+            ? `${by} is in distrustedKeys, and a closure it signed in a key document still counts here, since a closure only narrows trust; the Server counts it for nothing only when it was stored at or after the cutoff.`
+            : `If ${by} is honest, pin sha256:${e} in trustAnchors (VAULT_TRUST_ANCHORS on the Server, which publishes it); if it leaked, distrustedKeys sha256:${e}${at} (VAULT_DISTRUSTED_KEYS on the Server) makes this closure, and what ${by} signed after it, count for nothing.`;
+          finding('KEY_CLOSURE_INVALID', s, `the closure is signed by ${by}, which is reached but not anchored, and still counts: it ${effect}, and no key surface publishes ${by}, so an offline walk over the published statements cannot verify it and reads ${s.payload.subject.kid} as the engine does not. ${remedy}`);
         }
       }
       continue;
