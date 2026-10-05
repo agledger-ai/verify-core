@@ -76,7 +76,7 @@ describe('key statement trust walk', () => {
     const n = makeKey();
     const genesis = statement('genesis', c, { signers: [c] });
     const succ = statement('succession', n, { endorser: c, signers: [c, n], activatedAt: T1 });
-    const closure = statement('closure', c, { endorser: n, signers: [n], retiredAt: T2 });
+    const closure = statement('closure', c, { endorser: n, signers: [n], retiredAt: T2, createdAt: T2 });
     for (const anchor of [c, n]) {
       const trust = walk([row(c, T0, T2), row(n, T1)], [genesis, succ, closure], [anchor.digest]);
       expect(anchoredKids(trust)).toEqual([c.kid, n.kid].sort());
@@ -153,8 +153,8 @@ describe('key statement trust walk', () => {
     const genesis = statement('genesis', c, { signers: [c] });
     const succ = statement('succession', n, { endorser: c, signers: [c, n], activatedAt: T1 });
     const byStranger = statement('closure', c, { endorser: x, signers: [x], retiredAt: T0, forced: true });
-    const later = statement('closure', c, { endorser: n, signers: [n], retiredAt: T3 });
-    const earlier = statement('closure', c, { endorser: n, signers: [n], retiredAt: T2 });
+    const later = statement('closure', c, { endorser: n, signers: [n], retiredAt: T3, createdAt: T3 });
+    const earlier = statement('closure', c, { endorser: n, signers: [n], retiredAt: T2, createdAt: T3 });
     const trust = walk([row(x, T0)], [genesis, succ, byStranger, later, earlier], [c.digest]);
     expect(anchoredKids(trust)).toEqual([c.kid, n.kid].sort());
     expect(trust.byDigest.get(c.digest)!.retiredAt).toBe(T2);
@@ -321,7 +321,7 @@ describe('a leaked key', () => {
     }
   });
 
-  describe('a closure by a key reached but not anchored is a finding only where the published closures read its subject differently', () => {
+  describe('a counting closure by a key reached but not anchored is a finding, since every export carries it, and says when it moves the window', () => {
     const A = '2026-09-02T06:00:00.000000Z';
     const B = '2026-09-02T12:00:00.000000Z';
     const C = '2026-09-02T18:00:00.000000Z';
@@ -346,13 +346,33 @@ describe('a leaked key', () => {
       expect(trust.trusted.has(c.digest)).toBe(true);
       expect(trust.trusted.has(x.digest)).toBe(false);
       const onX = trust.findings.filter((f) => f.statementId === fromX.id);
-      expect(onX.map((f) => f.code)).toEqual(expected ? ['KEY_CLOSURE_INVALID'] : []);
-      if (expected) {
-        expect(onX[0]!.detail).toContain('reached but not anchored');
-        expect(onX[0]!.detail).toContain(`pin sha256:${x.digest} in trustAnchors`);
-        expect(onX[0]!.detail).toContain(`distrustedKeys sha256:${x.digest}@${fromX.createdAt}`);
-      }
+      expect(onX.map((f) => f.code)).toEqual(['KEY_CLOSURE_INVALID']);
+      expect(onX[0]!.detail).toContain('reached but not anchored');
+      expect(onX[0]!.detail).toContain(`pin sha256:${x.digest} in trustAnchors`);
+      expect(onX[0]!.detail).toContain(`distrustedKeys sha256:${x.digest}@${fromX.createdAt}`);
+      expect(/earlier than any closure a published key signs|which no closure a published key signs does/.test(onX[0]!.detail)).toBe(expected);
     });
+  });
+
+  it('the published admission of a trusted key whose endorser a forced closure cut off is a finding until the endorser is pinned', () => {
+    const a = makeKey();
+    const b = makeKey();
+    const d = makeKey();
+    const genesis = statement('genesis', a, { signers: [a], createdAt: T0 });
+    const admitB = statement('succession', b, { endorser: a, signers: [a, b], activatedAt: T1, createdAt: T1 });
+    const admitD = statement('succession', d, { endorser: b, signers: [b, d], activatedAt: T2, createdAt: T2 });
+    const forced = statement('closure', b, { endorser: d, signers: [d], retiredAt: T3, forced: true, createdAt: T3 });
+    const statements = [genesis, admitB, admitD, forced];
+    const trust = walk([], statements, [d.digest]);
+    expect(anchoredKids(trust)).toEqual([b.kid, d.kid].sort());
+    const onAdmission = trust.findings.filter((f) => f.statementId === admitB.id);
+    expect(onAdmission.map((f) => f.code)).toEqual(['KEY_STATEMENT_INVALID']);
+    expect(onAdmission[0]!.detail).toContain(`pin sha256:${a.digest} in trustAnchors`);
+    expect(walk([], statements, [d.digest, a.digest]).findings.filter((f) => f.statementId === admitB.id)).toEqual([]);
+    // A distrusted endorser is never offered as a pin.
+    const distrusted = walk([], statements, [d.digest], [{ spkiSha256: a.digest, cutoff: T3 }]);
+    expect(distrusted.findings.filter((f) => f.statementId === admitB.id).map((f) => f.code)).toEqual(['KEY_STATEMENT_INVALID']);
+    expect(distrusted.findings.every((f) => !f.detail.includes(`pin sha256:${a.digest}`))).toBe(true);
   });
 
   it('cannot admit a key by signing it in as its own predecessor, retired or not', () => {
@@ -505,7 +525,12 @@ describe('distrusted keys (the Server\'s VAULT_DISTRUSTED_KEYS)', () => {
     const applied = applyKeyTrust(buildKeyRegistry([{ keyId: n.kid, spkiBase64: n.publicKey, source: 'embedded' }]), cut).get(n.kid)!;
     expect(applied).toMatchObject({ trust: 'anchored', activatedAt: T0, distrustCutoff: T1 });
     expect(applied.retiredAt).toBeUndefined();
-    expect(codes(cut)).toEqual([['KEY_STATEMENT_INVALID', succM.id]]);
+    // With no retirement by a trusted key, nothing bounds what the entry
+    // accounts for: the succession n stored after its cutoff stays a finding,
+    // and so does n's registry row.
+    expect(codes(cut)).toEqual([['KEY_STATEMENT_INVALID', succM.id], ['KEY_CLOSURE_INVALID', null]]);
+    expect(cut.findings[1]!.detail).toContain(`POST /v1/admin/vault/signing-keys/${n.kid}/retire`);
+    expect(cut.accounted).toEqual([]);
     expect(anchoredKids(walk([], statements, [c.digest], [{ spkiSha256: n.digest, cutoff: null }]))).toEqual([c.kid]);
   });
 
@@ -544,6 +569,112 @@ describe('distrusted keys (the Server\'s VAULT_DISTRUSTED_KEYS)', () => {
       statement('genesis', a, { signers: [a], activatedAt: T3, createdAt: T3 }),
     ], [b.digest]);
     expect(trust.findings.filter((f) => f.code === 'KEY_CLOSURE_INVALID')).toEqual([]);
+  });
+
+  it('pinned and leaked, its closure of the key that retired it, stored after that retirement, counts until a dated entry beside the pin voids it', () => {
+    // D0 is pinned for its history and retired with force by D1, which runs
+    // under a fresh genesis. D0's leaked half then closes D1, dated just after
+    // D1's activation. Which of two mutual closures is honest is not
+    // something write order can settle, so the walk counts both; the dated
+    // entry is what voids D0's.
+    const d0 = makeKey();
+    const d1 = makeKey();
+    const D1_ACTIVE = '2026-09-03T00:00:00.000000Z';
+    const statements = [
+      statement('genesis', d0, { signers: [d0], activatedAt: T0, createdAt: T0 }),
+      statement('genesis', d1, { signers: [d1], activatedAt: D1_ACTIVE, createdAt: D1_ACTIVE }),
+      statement('closure', d0, { endorser: d1, signers: [d1], retiredAt: T1, forced: true, createdAt: '2026-09-03T00:00:01.000000Z' }),
+    ];
+    const backdated = statement('closure', d1, { endorser: d0, signers: [d0], retiredAt: '2026-09-03T00:00:00.500000Z', forced: true, createdAt: T3 });
+    const anchors = [d0.digest, d1.digest];
+    const rows = [row(d0, T0, T1), row(d1, D1_ACTIVE)];
+    const attacked = walk(rows, [...statements, backdated], anchors);
+    expect(attacked.byDigest.get(d1.digest)!.retiredAt).toBe('2026-09-03T00:00:00.500000Z');
+    const finding = attacked.findings.find((f) => f.statementId === backdated.id);
+    expect(finding?.detail).toContain('after its own retirement, and still counts');
+    // The remedy is one the verifier and the Server accept beside the pin: dated no later than D0's own retirement.
+    expect(finding?.detail).toContain(`distrustedKeys sha256:${d0.digest}@<instant>`);
+    expect(finding?.detail).toContain(`if nothing earlier is known, ${T1}, its retirement`);
+    expect(finding?.detail).toContain('Keep a trustAnchors pin');
+
+    const healed = walk(rows, [...statements, backdated], anchors, [{ spkiSha256: d0.digest, cutoff: T1 }]);
+    expect(healed.byDigest.get(d1.digest)).toMatchObject({ trusted: true, retiredAt: null });
+    expect(healed.byDigest.get(d0.digest)).toMatchObject({ trusted: true, activatedAt: T0, retiredAt: T1 });
+    // Stored after the retirement a trusted key signed for D0: nothing the
+    // entry accounts for, so it stays a finding.
+    expect(healed.findings.find((f) => f.statementId === backdated.id)?.detail).toContain('still in use by someone with write access');
+    expect(healed.accounted).toEqual([]);
+  });
+
+  it('a retirement dated ahead of its write time is a finding, and the distrust instant it suggests is capped at that write time', () => {
+    const d0 = makeKey();
+    const d1 = makeKey();
+    const FAR = '2099-01-01T00:00:00.000000Z';
+    const ahead = statement('closure', d0, { endorser: d1, signers: [d1], retiredAt: FAR, forced: true, createdAt: T2 });
+    const after = statement('closure', d1, { endorser: d0, signers: [d0], retiredAt: T1, forced: true, createdAt: T3 });
+    const trust = walk([row(d0, T0), row(d1, T1)], [
+      statement('genesis', d0, { signers: [d0], activatedAt: T0, createdAt: T0 }),
+      statement('genesis', d1, { signers: [d1], activatedAt: T1, createdAt: T1 }),
+      ahead, after,
+    ], [d0.digest, d1.digest]);
+    expect(trust.findings.find((f) => f.statementId === ahead.id)?.detail).toContain(`after ${T2.slice(0, 23)}Z when it was stored`);
+    const hint = trust.findings.find((f) => f.statementId === after.id)?.detail ?? '';
+    expect(hint).toContain(`if nothing earlier is known, ${T2}, its retirement`);
+    expect(hint).not.toContain(FAR);
+    // Within the millisecond a dump's write time carries, a retirement is not later than it.
+    const sameMs = statement('closure', d0, { endorser: d1, signers: [d1], retiredAt: '2026-09-03T00:00:00.000900Z', createdAt: T2 });
+    const close = walk([], [statement('genesis', d0, { signers: [d0], activatedAt: T0, createdAt: T0 }), statement('genesis', d1, { signers: [d1], activatedAt: T1, createdAt: T1 }), sameMs], [d0.digest, d1.digest]);
+    expect(close.findings).toEqual([]);
+  });
+
+  it('accounts for what it signed before a trusted key retired it, and reports what it signed after', () => {
+    // P leaked; the attacker staged S from it and force-retired P from S. The
+    // operator's N runs under a fresh genesis with P pinned, retires P with
+    // force, distrusts S from its closure, and retires S with force.
+    const p = makeKey();
+    const s = makeKey();
+    const n = makeKey();
+    const at = (m: number) => `2026-09-02T00:${String(m).padStart(2, '0')}:00.000000Z`;
+    const statements = [
+      statement('genesis', p, { signers: [p], activatedAt: T0, createdAt: T0 }),
+      statement('succession', s, { endorser: p, signers: [p, s], activatedAt: at(1), createdAt: at(1) }),
+    ];
+    const byS = statement('closure', p, { endorser: s, signers: [s], retiredAt: at(2), forced: true, createdAt: at(2) });
+    statements.push(byS,
+      statement('genesis', n, { signers: [n], activatedAt: at(3), createdAt: at(3) }),
+      statement('closure', p, { endorser: n, signers: [n], retiredAt: at(2), forced: true, createdAt: at(4) }));
+    const anchors = [p.digest, n.digest];
+    const distrusted = [{ spkiSha256: s.digest, cutoff: at(2) }];
+    const rows = [row(p, T0, at(2)), row(s, at(1)), row(n, at(3))];
+    const unretired = walk(rows, statements, anchors, distrusted);
+    // Nothing yet bounds S: its closure is a finding, and so is S.
+    expect(unretired.findings.map((f) => [f.code, f.statementId])).toEqual([['KEY_CLOSURE_INVALID', byS.id], ['KEY_CLOSURE_INVALID', null]]);
+    expect(unretired.findings[0]!.detail).toContain(`retire ${s.kid} with force`);
+    expect(unretired.distrustSpans.get(s.digest)).toEqual({ cutoff: at(2), retiredAt: null });
+
+    statements.push(statement('closure', s, { endorser: n, signers: [n], retiredAt: at(5), forced: true, createdAt: at(5) }));
+    rows[1] = row(s, at(1), at(5));
+    const retired = walk(rows, statements, anchors, distrusted);
+    expect(retired.findings).toEqual([]);
+    expect(retired.accounted.map((f) => [f.keyId, f.statementId])).toEqual([[p.kid, byS.id]]);
+    expect(retired.accounted[0]!.detail).toContain('the distrust entry accounts for it');
+    expect(retired.distrustSpans.get(s.digest)).toEqual({ cutoff: at(2), retiredAt: at(5) });
+    // A key document carries no write time the walk holds anything to: there
+    // the same statement is a finding, as the engine expects a verifier of
+    // the published statements to read it.
+    const asDoc = walk(rows.map(({ source: _s, ...k }) => k), statements.map(({ source: _s, ...st }) => ({ ...st, source: 'document' as const })), anchors, distrusted);
+    expect(asDoc.accounted).toEqual([]);
+    expect(asDoc.findings.map((f) => f.statementId)).toContain(byS.id);
+
+    // S signs again after N retired it: not accounted for.
+    const later = statement('closure', n, { endorser: s, signers: [s], retiredAt: at(3), forced: true, createdAt: at(6) });
+    const again = walk(rows, [...statements, later], anchors, distrusted);
+    expect(again.findings.map((f) => f.statementId)).toEqual([later.id]);
+    expect(again.byDigest.get(n.digest)!.retiredAt).toBeNull();
+
+    // A retirement dated ahead bounds the account at the closure's write time.
+    const ahead = [...statements.slice(0, -1), statement('closure', s, { endorser: n, signers: [n], retiredAt: '2099-01-01T00:00:00.000000Z', forced: true, createdAt: at(5) })];
+    expect(walk(rows, ahead, anchors, distrusted).distrustSpans.get(s.digest)).toEqual({ cutoff: at(2), retiredAt: at(5) });
   });
 
   it('is dated only by a key reached without it: a key it admitted cannot move its cutoff', () => {
@@ -684,15 +815,17 @@ describe('a walk over an older key document (no write order)', () => {
     }
   });
 
-  it('counts a statement listed twice once', () => {
+  it('counts a statement listed twice once, a dump row copied under another id included', () => {
     const c = makeKey();
     const n = makeKey();
     const succ = statement('succession', n, { endorser: c, signers: [c, n], activatedAt: T1 });
-    // As a dump row copied, a second admission cuts the edge back; as a
-    // document listing, with no row to tell them apart, it is the same statement.
+    // A copy repeats the signed payload, so it says nothing new, as the engine reads it.
     const keys = [{ keyId: c.kid, publicKey: c.publicKey }];
-    expect(anchoredKids(walk(keys, [succ, { ...succ, id: nextId() }], [n.digest]))).toEqual([n.kid]);
-    expect(anchoredKids(walk(keys, asDocument([succ, succ]), [n.digest]))).toEqual([c.kid, n.kid].sort());
+    for (const statements of [[succ, { ...succ, id: nextId() }], asDocument([succ, succ])]) {
+      const trust = walk(keys, statements, [n.digest]);
+      expect(anchoredKids(trust)).toEqual([c.kid, n.kid].sort());
+      expect(trust.findings).toEqual([]);
+    }
   });
 
   it('refuses statements that mix a write time with none', () => {
@@ -777,7 +910,9 @@ describe('a walk over a key document that publishes write order', () => {
     expect(anchoredKids(fromN)).toEqual([n.kid]);
     expect(fromN.byDigest.get(n.digest)!.activatedAt).toBe(T2);
     // c's genesis now touches no anchored key, as on the whole registry.
-    expect(fromN.findings.map((f) => [f.code, f.statementId])).toEqual([['KEY_STATEMENT_INVALID', genesis.id], ['KEY_STATEMENT_INVALID', later.id]]);
+    // n's first admission is signed by c, which the walk does not trust from
+    // n, and is published with n: no offline walk from n can verify it.
+    expect(fromN.findings.map((f) => [f.code, f.statementId])).toEqual([['KEY_STATEMENT_INVALID', genesis.id], ['KEY_STATEMENT_INVALID', succ.id], ['KEY_STATEMENT_INVALID', later.id]]);
     const fromC = walkDocument(doc, [c]);
     expect(anchoredKids(fromC)).toEqual([c.kid, n.kid].sort());
     expect(fromC.byDigest.get(n.digest)!.activatedAt).toBe(T2);
@@ -824,14 +959,17 @@ describe('a walk over a key document that publishes write order', () => {
     expect(trust.findings).toContainEqual(expect.objectContaining({ code: 'KEY_STATEMENT_INVALID', statementId: succ.id, detail: 'the row has no parseable created_at to order it by' }));
   });
 
-  it('a row read from two sources is one statement, and a copy of it under another id is a second', () => {
+  it('a row read from two sources is one statement, and so is a copy of it under another id and a later time', () => {
     const c = makeKey();
     const n = makeKey();
     const succ = statement('succession', n, { endorser: c, signers: [c, n], activatedAt: T1, createdAt: T1 });
     const keys = [{ keyId: c.kid, publicKey: c.publicKey }];
     const timed = { ...succ, createdAt: '2026-09-02T00:00:00.000123Z' };
     expect(anchoredKids(walk(keys, [timed, { ...timed }], [n.digest]))).toEqual([c.kid, n.kid].sort());
-    expect(anchoredKids(walk(keys, [timed, { ...timed, id: nextId() }], [n.digest]))).toEqual([n.kid]);
+    const copy = { ...timed, id: nextId(), createdAt: '2026-09-04T00:00:00.000000Z' };
+    const trust = walk(keys, [timed, copy], [n.digest]);
+    expect(anchoredKids(trust)).toEqual([c.kid, n.kid].sort());
+    expect(trust.findings).toEqual([]);
   });
 
   it('a later succession whose endorser the document does not carry dates the window earlier than the engine, and the listed activatedAt says so', () => {
@@ -870,7 +1008,7 @@ describe('the source a statement is read from', () => {
   it('a key document\'s statement, or one that names no source, never keeps an edge out of a distrusted key', () => {
     for (const source of ['document', undefined] as const) {
       const statements = [genesis, succ].map(({ source: _s, endorserKeyId: _e, ...st }) => ({ ...st, ...(source ? { source } : {}) }));
-      const trust = computeKeyTrust({ ...base, statements });
+      const trust = computeKeyTrust({ ...base, keys: base.keys.map(({ source: _k, ...k }) => k), statements });
       expect(trust.order).toBe('written');
       expect(trust.trusted.has(x.digest)).toBe(false);
       // Its time is before the cutoff, where the engine would count it: voided
@@ -1004,7 +1142,14 @@ describe('the trust walk on random registries', () => {
 
   /** The model, restated from its definition over statements whose signatures all verify. */
   function reference(statements: SimStatement[], anchors: ReadonlySet<string>) {
-    const order = inWriteOrder(statements);
+    // A statement repeating an earlier one's signed payload says nothing new.
+    const seen = new Set<string>();
+    const order = inWriteOrder(statements).filter((s) => {
+      const payload = Buffer.from(encodePayload(s.payload)).toString('hex');
+      if (seen.has(payload)) return false;
+      seen.add(payload);
+      return true;
+    });
     const subjectOf = (s: SimStatement) => s.payload.subject.spkiSha256;
     const signerOf = (s: SimStatement) => s.payload.endorser?.spkiSha256;
     const admissions = (k: string) => order.filter((s) => (s.kind === 'genesis' || s.kind === 'succession') && subjectOf(s) === k);

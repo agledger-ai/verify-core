@@ -130,9 +130,11 @@ statements sign. `keyTrust.status` says whether a pass can be trusted:
 A pass on `no_anchor` or `no_anchored_signature` is not a trusted verdict; the
 `detail` says so, and `verdict` (and every AGLedger surface) reports it as
 `unanchored`. `distrustedKeys` without `trustAnchors` throws `TypeError`, since
-nothing would apply them, and so does a key that is both pinned and
-distrusted, which the Server refuses to start with: pin the successor of a key
-that leaked.
+nothing would apply them, and so does a pinned key distrusted with no instant,
+which the Server refuses to start with. A pin beside a dated entry
+(`sha256:<hex>@<instant>`) is how a leaked key's history stays verifiable: the
+pin vouches for what the key stored before the instant, and the entry
+withdraws what it stored from then on.
 
 ```ts
 import { verifyAuditExport } from '@agledger/verify-core';
@@ -155,15 +157,16 @@ walked, together with any `statements` on keys you supply from
 result invalid, at position 0:
 
 - `KEY_STATEMENT_INVALID`: a statement that does not verify, disagrees with
-  what it is filed under, touches no anchored key, or was signed by a key after
-  its closure or after the key was already admitted;
+  what it is filed under, touches no anchored key, was signed by a key after
+  its closure or after the key was already admitted, or admits a trusted key
+  under an endorser the walk does not trust (the Server publishes the
+  admission and not its endorser);
 - `KEY_CLOSURE_INVALID`: a retired key with no closure that counts for it, or
   a closure by a key the walk does not anchor, by a key after its own
-  retirement, or dated before its subject was activated, or one by a key the
-  walk reaches but does not anchor that retires an anchored key earlier, or
-  with force, than any closure a published key signed (a walk over the
-  Server's published key documents cannot see it, so it reads that key
-  differently);
+  retirement, dated before its subject was activated, dated after the time it
+  was stored, or signed by a key the walk reaches but does not anchor and
+  closing a published key (the Server publishes the closure and not its
+  signer, so no walk over what it publishes can verify it);
 - `CHAIN_KEY_WINDOW_DRIFT`: a listed window or status that differs from the
   signed value (compared at millisecond precision).
 
@@ -258,6 +261,27 @@ verified: with none, the status becomes `no_anchored_signature`.
 `writtenWhileSigning(rowTime, signingSince)` is the unsigned-row rule for
 checkpoints and read-log rows, and fails closed on a row with no readable time
 once signing began.
+
+A statement repeating an earlier one's signed payload counts once, at its
+first write: a row copied in the database under a new id and time says
+nothing new, as the engine reads it.
+
+On a dump, a `distrustedKeys` key that a key the walk trusts has retired is
+bounded by that retirement (its `DistrustSpan` in `trust.distrustSpans`), and
+what it signed before then is accounted for rather than failed, as the engine's
+scan lists it: a key statement it signed that counts for nothing is listed in
+`trust.accounted` (and the report's `accounted`) instead of `findings`, and a
+chain entry whose signature verifies under it, outside what the key is
+trusted for (the key unanchored, or the entry written at or after its cutoff),
+is listed in the `verifyChain` result's `accounted` as
+`CHAIN_SIGNED_BY_DISTRUSTED_KEY` (`AccountedEntry`: `code`, `chain`,
+`recordId`, `orgId`, `scopeId`, `position`, `keyId`, `detail`) with signature
+state `accounted`, and does not fail the chain. A verdict whose only items are
+accounted ones passes, and should list them. What the key signed after that
+retirement fails as before, and a distrusted key with a registry row that no
+trusted key has retired is `KEY_CLOSURE_INVALID` naming the forced retire call
+that bounds it. An audit export is never accounted for this way: its write
+times are not the Server's word.
 
 `keyStatementsFromVerificationKeys(document)` gives the same inputs from a
 `GET /v1/verification-keys` response. A key reached only through a statement

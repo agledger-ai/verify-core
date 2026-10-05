@@ -171,6 +171,7 @@ export function portInput(sc: FuzzScenario): ComputeKeyTrustInput {
       status: k.status,
       activatedAt: toMs(k.activatedAt),
       retiredAt: k.status === 'retired' ? toMs(k.retiredAt) : null,
+      source: 'dump' as const,
     })),
     statements: sc.statements.map((s) => ({
       id: s.id,
@@ -241,12 +242,18 @@ export interface Verdict {
   trusted: number[];
   windows: Record<string, [string | null, string | null]>;
   findings: string[];
+  /** Statements the distrust entries account for, as `statementId|key`. */
+  accounted: string[];
+  /** Each distrusted key's span, `[cutoff, retiredAt]`. */
+  spans: Record<string, [string | null, string | null]>;
 }
 
 export function verdictOf(t: {
   trusted: Iterable<string>;
   windowOf: (digest: string) => { activatedAt: string | null; retiredAt: string | null } | undefined;
   findings: Iterable<{ code: string; statementId: string | null; keyId: string | null }>;
+  accounted: Iterable<{ statementId: string | null; keyId: string | null }>;
+  spans: ReadonlyMap<string, { cutoff: string | null; retiredAt: string | null }>;
 }): Verdict {
   const trusted = [...t.trusted].map((d) => indexOfDigest.get(d)!).sort((a, b) => a - b);
   const windows: Verdict['windows'] = {};
@@ -258,7 +265,14 @@ export function verdictOf(t: {
     .filter((f) => f.code !== 'CHAIN_KEY_WINDOW_DRIFT')
     .map((f) => `${f.code}|${f.statementId ?? ''}|${f.keyId === null ? '' : indexOfKid.get(f.keyId) ?? f.keyId}`)
     .sort();
-  return { trusted, windows, findings };
+  const accounted = [...t.accounted]
+    .map((f) => `${f.statementId ?? ''}|${f.keyId === null ? '' : indexOfKid.get(f.keyId) ?? f.keyId}`)
+    .sort();
+  const spans: Verdict['spans'] = {};
+  for (const [d, span] of [...t.spans].sort(([a], [b]) => indexOfDigest.get(a)! - indexOfDigest.get(b)!)) {
+    spans[String(indexOfDigest.get(d))] = [span.cutoff, span.retiredAt];
+  }
+  return { trusted, windows, findings, accounted, spans };
 }
 
 export function portVerdict(trust: KeyTrust): Verdict {
@@ -269,5 +283,5 @@ export function portVerdict(trust: KeyTrust): Verdict {
     const e = trust.byDigest.get(d);
     return e && { activatedAt: e.activatedAt, retiredAt: e.distrustCutoff ?? e.retiredAt };
   };
-  return verdictOf({ trusted: trust.trusted, windowOf, findings: trust.findings });
+  return verdictOf({ trusted: trust.trusted, windowOf, findings: trust.findings, accounted: trust.accounted, spans: trust.distrustSpans });
 }

@@ -7,13 +7,17 @@ export { suggestion } from './failures.js';
 export type { FailureCode } from './failures.js';
 
 export {
+  ACCOUNTED_ENTRY_CODE,
   buildAgentKeyRegistry,
   buildKeyRegistry,
+  chainOfScope,
   earliestKeyActivation,
   verifyChain,
   writtenWhileSigning,
 } from './chain.js';
 export type {
+  AccountedEntry,
+  AccountedEntryCode,
   AgentKeyRegistry,
   KeySource,
   KeyTrustState,
@@ -59,6 +63,7 @@ export {
 export type {
   ComputeKeyTrustInput,
   DistrustedKey,
+  DistrustSpan,
   DumpKeyStatementRow,
   DumpSigningKeyRow,
   KeyRegistryFinding,
