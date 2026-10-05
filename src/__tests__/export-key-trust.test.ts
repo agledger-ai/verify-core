@@ -137,11 +137,17 @@ describe('verifyAuditExport with trustAnchors', () => {
     expect(mixed.entries.every((e) => e.valid)).toBe(true);
   });
 
-  it('refuses a key that is both pinned and distrusted, as the Server refuses to start with it', () => {
+  it('refuses a key both pinned and distrusted with no instant, as the Server refuses to start with it, and takes one distrusted from an instant', () => {
     const exp = load('valid.json');
-    for (const distrust of [pinOf(exp), `${pinOf(exp)}@2026-09-01T00:00:00Z`, pinOf(exp).toUpperCase().replace('SHA256', 'sha256')]) {
-      expect(() => verifyAuditExport(exp, { trustAnchors: [pinOf(exp)], distrustedKeys: [distrust] })).toThrow(/both a trust anchor and a distrusted key/);
+    for (const distrust of [pinOf(exp), pinOf(exp).toUpperCase().replace('SHA256', 'sha256')]) {
+      expect(() => verifyAuditExport(exp, { trustAnchors: [pinOf(exp)], distrustedKeys: [distrust] })).toThrow(/a trust anchor and a distrusted key with no instant/);
     }
+    // Beside a pin, a dated entry vouches for what the key stored before the
+    // instant and withdraws what it stored from then on.
+    const before = verifyAuditExport(exp, { trustAnchors: [pinOf(exp)], distrustedKeys: [`${pinOf(exp)}@2099-01-01T00:00:00Z`] });
+    expect(before.verdict).toBe('trusted');
+    const after = verifyAuditExport(exp, { trustAnchors: [pinOf(exp)], distrustedKeys: [`${pinOf(exp)}@2026-01-01T00:00:00Z`] });
+    expect(after.brokenAt?.code).toBe('CHAIN_KEY_EXPIRED');
   });
 
   it('a distrusted key with no instant and no retirement is trusted for nothing, though its admitting root is pinned', () => {
@@ -359,8 +365,12 @@ describe('an honest rotation from a key distrusted after it', () => {
     expect(r.keyTrust.notes).toEqual([expect.objectContaining({ keyId: n.kid, statementId: rot.id })]);
   });
 
-  it('pinned only on the distrusted key, is refused: pin its successor', () => {
-    expect(() => run(c, distrustC)).toThrow(/both a trust anchor and a distrusted key/);
+  it('pinned only on the distrusted key, with no instant is refused, and with one does not reach its successor, whose admission the document cannot date: pin the successor', () => {
+    expect(() => run(c, [`sha256:${c.digest}`])).toThrow(/a trust anchor and a distrusted key with no instant/);
+    const r = run(c, distrustC);
+    expect(r.brokenAt).toMatchObject({ code: 'CHAIN_SIGNING_KEY_UNANCHORED' });
+    expect(r.keyTrust.anchoredKeyIds).toEqual([c.kid]);
+    expect(r.keyTrust.notes).toEqual([expect.objectContaining({ keyId: n.kid, statementId: rot.id })]);
   });
 });
 

@@ -25,7 +25,27 @@ try { sha = execFileSync('git', ['rev-parse', '--short=8', 'HEAD'], { encoding: 
 
 const CODE: Record<string, string> = { key_statement_invalid: 'KEY_STATEMENT_INVALID', key_closure_invalid: 'KEY_CLOSURE_INVALID', key_window_drift: 'CHAIN_KEY_WINDOW_DRIFT' };
 const verdicts: Record<string, Verdict> = {};
+const documents: Record<string, Verdict> = {};
 const published: Record<string, PublishedFuzzKey[]> = {};
+type EngineTrust = {
+  anchored: Set<string>;
+  byDigest: Map<string, { activatedAt: string | null; retiredAt: string | null; statements: Array<{ row: { id: string } }> }>;
+  findings: Array<{ class: string; statementId: string | null; keyId: string | null }>;
+  accounted: Array<{ class: string; statementId: string | null; keyId: string | null }>;
+  distrustSpans: Map<string, { cutoff: string | null; retiredAt: string | null }>;
+  undecided: Set<string>;
+  vouched: Set<string>;
+};
+const verdictOfEngine = (t: EngineTrust, asDocument: boolean): Verdict => verdictOf({
+  trusted: t.anchored,
+  windowOf: (d: string) => t.byDigest.get(d),
+  // Over a key document, what the engine accounts for a verifier reports as a
+  // finding (vault.service's publishedFindings), since a document's write
+  // times are not held against anything.
+  findings: [...t.findings, ...(asDocument ? t.accounted : [])].map((f) => ({ code: CODE[f.class] ?? f.class, statementId: f.statementId, keyId: f.keyId })),
+  accounted: asDocument ? [] : t.accounted,
+  spans: t.distrustSpans,
+});
 const iso = (instant: string) => new Date(toMs(instant)).toISOString();
 for (let seed = first; seed < first + count; seed++) {
   const sc = scenario(seed);
@@ -39,20 +59,18 @@ for (let seed = first; seed < first + count; seed++) {
     activated_at_us: k.activatedAt,
     retired_at_us: k.status === 'retired' ? k.retiredAt : null,
   }));
-  const e = engine.computeKeyTrust({
-    rows,
-    statements: sc.statements.map((s) => ({
-      id: s.id,
-      kind: s.kind,
-      subject_key_id: POOL[s.subject]!.kid,
-      endorser_key_id: s.endorser === null ? null : POOL[s.endorser]!.kid,
-      statement: s.cose,
-      created_at: new Date(s.createdMs),
-      created_at_us: s.createdUs,
-    })),
-    anchors: new Set(sc.anchors.map((k) => POOL[k]!.digest)),
-    distrusted: sc.distrusted.map((d) => ({ spkiSha256: POOL[d.key]!.digest, cutoff: d.cutoff })),
-  });
+  const statementRows = sc.statements.map((s) => ({
+    id: s.id,
+    kind: s.kind,
+    subject_key_id: POOL[s.subject]!.kid,
+    endorser_key_id: s.endorser === null ? null : POOL[s.endorser]!.kid,
+    statement: s.cose,
+    created_at: new Date(s.createdMs),
+    created_at_us: s.createdUs,
+  }));
+  const anchors = new Set(sc.anchors.map((k) => POOL[k]!.digest));
+  const distrusted = sc.distrusted.map((d) => ({ spkiSha256: POOL[d.key]!.digest, cutoff: d.cutoff }));
+  const e: EngineTrust = engine.computeKeyTrust({ rows, statements: statementRows, anchors, distrusted });
   // As listPublishedSigningKeys publishes them (no fuzz key is undecided, so
   // nothing is vouched, but the rule is kept).
   const doc: PublishedFuzzKey[] = [];
@@ -74,12 +92,28 @@ for (let seed = first; seed < first + count; seed++) {
     });
   }
   published[String(seed)] = doc;
-  verdicts[String(seed)] = verdictOf({
-    trusted: e.anchored,
-    windowOf: (d: string) => e.byDigest.get(d),
-    findings: e.findings.map((f: { class: string; statementId: string | null; keyId: string | null }) => ({ code: CODE[f.class] ?? f.class, statementId: f.statementId, keyId: f.keyId })),
+  verdicts[String(seed)] = verdictOfEngine(e, false);
+  // The same walk over that document, as vault.service's publishedWalkInputs
+  // feeds it: the published keys with the windows they are published with,
+  // and the statements published with them.
+  const ids = new Set(doc.flatMap((k) => k.statements));
+  const docRows = doc.map((k) => {
+    const row = rows[sc.rows.findIndex((r) => r.key === k.key)]!;
+    const signed = e.byDigest.get(POOL[k.key]!.digest);
+    const anchored = e.anchored.has(POOL[k.key]!.digest);
+    return {
+      ...row,
+      status: k.retiredAt === null ? 'active' : 'retired',
+      activated_at: new Date(k.activatedAt),
+      retired_at: k.retiredAt === null ? null : new Date(k.retiredAt),
+      activated_at_us: (anchored ? signed?.activatedAt : null) ?? row.activated_at_us,
+      retired_at_us: k.retiredAt === null ? null : signed?.retiredAt ?? row.retired_at_us,
+    };
   });
+  documents[String(seed)] = verdictOfEngine(engine.computeKeyTrust({
+    rows: docRows, statements: statementRows.filter((s) => ids.has(s.id)), anchors, distrusted, asDocument: true,
+  }), true);
 }
 const out = new URL('../src/__tests__/fixtures/key-trust-engine.json', import.meta.url);
-writeFileSync(out, `${JSON.stringify({ engine: sha, first, count, verdicts, published })}\n`);
+writeFileSync(out, `${JSON.stringify({ engine: sha, first, count, verdicts, documents, published })}\n`);
 console.log(`recorded ${count} verdicts from engine ${sha}`);

@@ -111,6 +111,7 @@ export function row(k: TestKey, activated: string, retired: string | null = null
     status: retired ? 'retired' : 'active',
     activatedAt: ms(activated),
     retiredAt: retired ? ms(retired) : null,
+    source: 'dump',
   };
 }
 

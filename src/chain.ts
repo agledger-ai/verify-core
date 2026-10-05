@@ -111,6 +111,16 @@ export interface VerificationKey {
    */
   distrustCutoff?: string;
   /**
+   * Set by `applyKeyTrust` on a walk over a dump, for a key `distrustedKeys`
+   * names: the instant from which what it signs counts for nothing, and the
+   * earliest retirement a key the walk trusts signed for it (see the
+   * `DistrustSpan` of `computeKeyTrust`). An entry it signed outside its
+   * trust (the key unanchored, or the entry written at or after the cutoff),
+   * written before that retirement and whose signature verifies under it, is
+   * accounted for: listed as CHAIN_SIGNED_BY_DISTRUSTED_KEY, never a failure.
+   */
+  distrustSpan?: { cutoff: string | null; retiredAt: string | null };
+  /**
    * The key-statement walk's verdict on this key, set by `applyKeyTrust`.
    * Absent when no walk ran (no `trustAnchors`), and the result then reports
    * `optionalChecks.key_anchoring: skipped_no_input`; with a walk and no
@@ -252,8 +262,12 @@ export interface SignatureOutcome {
    *   CHAIN_UNSUPPORTED_ALGORITHM. A failure state, never a benign skip, and
    *   never tamper evidence: distinguishing it from `invalid` is the whole
    *   point, since only `invalid` means a signature was checked and failed.
+   * - `accounted`: the signature verifies under a key `distrustedKeys` names,
+   *   outside what the key is trusted for, and the entry was written before a
+   *   key the walk trusts retired it (dumps only). Not a failure and not a
+   *   verified entry: see {@link AccountedEntry}.
    */
-  state: 'ok' | 'invalid' | 'unsigned' | 'skipped' | 'not-checked' | 'decode-fail' | 'unsupported';
+  state: 'ok' | 'invalid' | 'unsigned' | 'skipped' | 'not-checked' | 'decode-fail' | 'unsupported' | 'accounted';
   /** Provenance of the key the signature was checked against ('ok' / 'invalid'). */
   keySource?: KeySource;
 }
@@ -263,8 +277,54 @@ export interface ChainEntryResult {
   position: number;
   valid: boolean;
   failure?: { code: FailureCode; detail: string };
+  /** Set, with `valid: true` and signature `accounted`, on an entry the distrust entry accounts for. */
+  accounted?: { code: AccountedEntryCode; detail: string };
   signature: SignatureOutcome['state'];
   keySource?: KeySource;
+}
+
+/** The code an {@link AccountedEntry} carries. Not a {@link FailureCode}: it never fails a verdict. */
+export const ACCOUNTED_ENTRY_CODE = 'CHAIN_SIGNED_BY_DISTRUSTED_KEY';
+export type AccountedEntryCode = typeof ACCOUNTED_ENTRY_CODE;
+
+/**
+ * A chain entry of a dump whose signature verifies under a key
+ * `distrustedKeys` names, that falls outside what the key is trusted for
+ * (the key is unanchored, or the entry was written at or after its cutoff),
+ * and that was written before a key the walk trusts retired it. The distrust
+ * entry and that retirement account for it, as the engine's scan lists it in
+ * `distrustedEntries`: it is listed, it is not verified, and it fails
+ * nothing. An entry written after that retirement, or under a distrusted key
+ * no trusted key has retired, fails as before (CHAIN_SIGNING_KEY_UNANCHORED
+ * or CHAIN_KEY_EXPIRED). An audit export never carries one.
+ *
+ * `chain` and `recordId`/`orgId` name the chain as the engine does: a record
+ * chain by its record id, the platform-ops chain (record id
+ * 00000000-0000-0000-0000-000000000000) as `admin`, and an org's schema chain
+ * (`schema:<orgId>`, `schema:__platform__` for the platform's) as `schema`.
+ */
+export interface AccountedEntry {
+  code: AccountedEntryCode;
+  chain: 'record' | 'admin' | 'schema';
+  recordId: string | null;
+  orgId: string | null;
+  /** The chain's scope as the walk was given it (a record id, or a dump's `chain_key`). */
+  scopeId: string;
+  position: number;
+  keyId: string;
+  detail: string;
+}
+
+const PLATFORM_OPS_RECORD_ID = '00000000-0000-0000-0000-000000000000';
+
+/** Name a chain scope (a record id or a dump `chain_key`) as {@link AccountedEntry} does. */
+export function chainOfScope(scopeId: string): Pick<AccountedEntry, 'chain' | 'recordId' | 'orgId'> {
+  if (scopeId.startsWith('schema:')) {
+    const org = scopeId.slice('schema:'.length);
+    return { chain: 'schema', recordId: null, orgId: org === '__platform__' ? null : org };
+  }
+  if (scopeId.toLowerCase() === PLATFORM_OPS_RECORD_ID) return { chain: 'admin', recordId: null, orgId: null };
+  return { chain: 'record', recordId: scopeId, orgId: null };
 }
 
 export interface ChainResult {
@@ -274,6 +334,12 @@ export interface ChainResult {
   verifiedEntries: number;
   brokenAt?: { position: number; code: FailureCode; detail: string };
   entries: ChainEntryResult[];
+  /**
+   * Entries the distrust entry accounts for (see {@link AccountedEntry}), in
+   * chain order. They count toward `valid` and not toward `verifiedEntries`
+   * or `signatureCoverage.signed`.
+   */
+  accounted: AccountedEntry[];
   signatureCoverage: { signed: number; unsigned: number; skipped: number; total: number };
   /** Which input-gated checks actually ran on this chain vs were skipped for absent input. */
   optionalChecks: Record<OptionalCheck, CheckApplicability>;
@@ -424,6 +490,7 @@ export function verifyChain(
   const agentSignatures = { present: 0, verified: 0 };
   let verifiedEntries = 0;
   let brokenAt: ChainResult['brokenAt'];
+  const accounted: AccountedEntry[] = [];
 
   if (sorted.length === 0) {
     return {
@@ -433,6 +500,7 @@ export function verifyChain(
       verifiedEntries: 0,
       brokenAt: { position: 0, code: 'CHAIN_EMPTY', detail: 'No entries to verify.' },
       entries: [],
+      accounted: [],
       signatureCoverage: coverage,
       optionalChecks,
       keyProvenance,
@@ -467,12 +535,21 @@ export function verifyChain(
     // As the engine's walk does: any earlier row naming a key, whatever its own
     // verdict, means this chain was already being signed.
     if (entry.signingKeyId !== null) mustSign.signedBefore = true;
-    if (result.valid) {
+    if (result.valid && result.accounted === undefined) {
       result = checkAgentSignature(entry, result, options.agentKeys, optionalChecks, agentSignatures);
     }
     entryResults.push(result);
 
-    if (result.valid) verifiedEntries++;
+    if (result.accounted !== undefined) {
+      accounted.push({
+        code: result.accounted.code,
+        ...chainOfScope(scopeId),
+        scopeId,
+        position: result.position,
+        keyId: entry.signingKeyId ?? '',
+        detail: result.accounted.detail,
+      });
+    } else if (result.valid) verifiedEntries++;
     else if (!brokenAt && result.failure) {
       brokenAt = { position: result.position, code: result.failure.code, detail: result.failure.detail };
     }
@@ -505,11 +582,12 @@ export function verifyChain(
 
   return {
     scopeId,
-    valid: verifiedEntries === sorted.length,
+    valid: verifiedEntries + accounted.length === sorted.length,
     totalEntries: sorted.length,
     verifiedEntries,
     brokenAt,
     entries: entryResults,
+    accounted,
     signatureCoverage: coverage,
     optionalChecks,
     keyProvenance,
@@ -568,6 +646,17 @@ function checkAgentSignature(
       : `Sealed agent_signature for cert ${certLabel} does not verify under the supplied key with thumbprint ${claim.certThumbprint}.`,
     result.signature,
   );
+}
+
+function accountedResult(scopeId: string, position: number, detail: string): ChainEntryResult {
+  return { scopeId, position, valid: true, accounted: { code: ACCOUNTED_ENTRY_CODE, detail }, signature: 'accounted' };
+}
+
+/** The registry declares an algorithm for the key that its key material does not commit to. */
+function declaredAlgorithmLies(key: VerificationKey): boolean {
+  if (typeof key.algorithm !== 'string') return false;
+  const keyAlg = resolveKeyAlgorithm(key.spkiBase64);
+  return typeof keyAlg === 'object' && keyAlg.name.toLowerCase() !== key.algorithm.toLowerCase();
 }
 
 function fail(
@@ -818,6 +907,9 @@ function verifyEntry(
   // convenience; the kid at protected-header label 4 is signature-covered. A
   // divergence means the column was rewritten after signing, e.g. to point
   // verification at a key the tamperer controls.
+  // An accounted-for entry past its distrust cutoff (see the temporal check).
+  let accountedPastCutoff: string | null = null;
+
   const signedKid = extractKid(parts.protectedBstr);
   if (signedKid !== null && signedKid !== entry.signingKeyId) {
     return fail(
@@ -836,6 +928,16 @@ function verifyEntry(
   if (key.trust !== undefined) {
     optionalChecks.key_anchoring = 'applied';
     if (key.trust === 'unanchored') {
+      // A key the auditor distrusts, retired by a key the walk trusts: an
+      // entry it signed before that retirement is accounted for, never
+      // verified. Only one whose signature verifies under the key, and whose
+      // key material the registry does not lie about: anything else under
+      // its id is bytes the database's writer wrote.
+      const bound = key.distrustSpan?.retiredAt ?? null;
+      if (bound !== null && isInstant(entry.createdAt) && rfc3339Ms(entry.createdAt) < instantMs(bound)
+        && !declaredAlgorithmLies(key) && verifyCoseSign1(envelopeBytes, key.spkiBase64) === 'ok') {
+        return accountedResult(scopeId, expectedPosition, `Entry written ${entry.createdAt} is signed by key ${entry.signingKeyId}, which distrustedKeys names and no signed key statement links to a pinned trust anchor, before ${bound}, when a key the walk trusts retired it: the distrust entry accounts for it. Not verified, and not a failure.`);
+      }
       return fail(
         scopeId,
         expectedPosition,
@@ -859,19 +961,13 @@ function verifyEntry(
   // key material commits to. A registry row that lies about its own key is the
   // signature of a mis-registered key (the pre-guard P-256 corruption shape) or
   // a rewritten registry, and nothing verified against it can be trusted.
-  if (typeof key.algorithm === 'string') {
-    const keyAlg = resolveKeyAlgorithm(key.spkiBase64);
-    if (
-      typeof keyAlg === 'object' &&
-      keyAlg.name.toLowerCase() !== key.algorithm.toLowerCase()
-    ) {
-      return fail(
-        scopeId,
-        expectedPosition,
-        'CHAIN_ALG_MISMATCH',
-        `Key registry declares algorithm=${key.algorithm} for key ${entry.signingKeyId}, but the key material is ${keyAlg.name}.`,
-      );
-    }
+  if (declaredAlgorithmLies(key)) {
+    return fail(
+      scopeId,
+      expectedPosition,
+      'CHAIN_ALG_MISMATCH',
+      `Key registry declares algorithm=${key.algorithm} for key ${entry.signingKeyId}, but the key material is ${(resolveKeyAlgorithm(key.spkiBase64) as { name: string }).name}.`,
+    );
   }
 
   // Input-gated: temporal key-validity, whenever the key carries a window.
@@ -903,7 +999,17 @@ function verifyEntry(
     }
     const temporal = temporalKeyFailure(entry.createdAt, key);
     if (temporal) {
-      return fail(scopeId, expectedPosition, temporal.code, temporal.detail);
+      // Past the instant the auditor's distrust entry gives, and before a key
+      // the walk trusts retired the key: accounted for, never verified. The
+      // signature below still has to verify.
+      const span = key.distrustSpan;
+      const written = rfc3339Ms(entry.createdAt);
+      if (temporal.code === 'CHAIN_KEY_EXPIRED' && span !== undefined && span.cutoff !== null && span.retiredAt !== null
+        && written >= instantMs(span.cutoff) && written < instantMs(span.retiredAt)) {
+        accountedPastCutoff = `Entry written ${entry.createdAt} is signed by key ${entry.signingKeyId} at or after ${span.cutoff}, the instant distrustedKeys gives for it, and before ${span.retiredAt}, when a key the walk trusts retired it: the distrust entry accounts for it. Not verified, and not a failure.`;
+      } else {
+        return fail(scopeId, expectedPosition, temporal.code, temporal.detail);
+      }
     }
   }
 
@@ -923,6 +1029,7 @@ function verifyEntry(
     );
   }
   if (outcome === 'ok') {
+    if (accountedPastCutoff !== null) return accountedResult(scopeId, expectedPosition, accountedPastCutoff);
     return { scopeId, position: expectedPosition, valid: true, signature: 'ok', keySource: key.source };
   }
   if (outcome === 'alg-mismatch') {

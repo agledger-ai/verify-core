@@ -1,5 +1,7 @@
 import { readFileSync } from 'node:fs';
+import { decode as cborDecode } from 'cborg';
 import { describe, expect, it } from 'vitest';
+import { decodeCoseSign1 } from '../primitives.js';
 import { computeKeyTrust, keyStatementsFromVerificationKeys, type KeyTrust } from '../key-statements.js';
 import {
   POOL,
@@ -26,9 +28,34 @@ import {
 const recorded = JSON.parse(readFileSync(new URL('./fixtures/key-trust-engine.json', import.meta.url), 'utf8')) as {
   engine: string;
   verdicts: Record<string, Verdict>;
+  /** The engine's walk over the document it publishes (`asDocument`), what it accounts for read as findings. */
+  documents: Record<string, Verdict>;
   published: Record<string, PublishedFuzzKey[]>;
 };
 const seeds = Object.keys(recorded.verdicts);
+
+/**
+ * A verdict at the millisecond precision a dump's write times carry. A
+ * retirement bound is capped at its closure's write time, which a dump gives
+ * in milliseconds and the engine holds in microseconds; every entry and
+ * statement is graded against it in milliseconds, so that is where the two
+ * must agree.
+ */
+function atMilliseconds(v: Verdict): Verdict {
+  const ms = (x: string | null) => (x === null ? null : `${x.slice(0, 23)}Z`);
+  const pair = (r: Record<string, [string | null, string | null]>) =>
+    Object.fromEntries(Object.entries(r).map(([k, [a, b]]) => [k, [ms(a), ms(b)]]));
+  return { ...v, windows: pair(v.windows), spans: pair(v.spans) };
+}
+
+/** The `retiredAt` a closure signs. */
+function retiredAtOf(st: FuzzScenario['statements'][number]): string | null {
+  if (st.kind !== 'closure') return null;
+  const parts = decodeCoseSign1(st.cose[0]!);
+  if (parts === null) return null;
+  const payload = cborDecode(parts.payloadBstr, { useMaps: false }) as { subject?: { retiredAt?: string } };
+  return payload.subject?.retiredAt ?? null;
+}
 
 function walkDocument(sc: FuzzScenario, published: readonly PublishedFuzzKey[]): KeyTrust {
   return computeKeyTrust({
@@ -43,8 +70,16 @@ describe(`the trust walk against the engine (${recorded.engine})`, () => {
     expect(seeds.length).toBeGreaterThanOrEqual(1000);
     const diverged: string[] = [];
     for (const seed of seeds) {
-      const got = portVerdict(computeKeyTrust(portInput(scenario(Number(seed)))));
-      const want = recorded.verdicts[seed]!;
+      const sc = scenario(Number(seed));
+      const got = atMilliseconds(portVerdict(computeKeyTrust(portInput(sc))));
+      const want = atMilliseconds(recorded.verdicts[seed]!);
+      // A closure dated after its write time within the same millisecond:
+      // the engine sees it in microseconds, a dump's write time cannot show it.
+      const hidden = new Set(sc.statements.filter((st) => {
+        const retiredAt = retiredAtOf(st);
+        return retiredAt !== null && retiredAt > st.createdUs && retiredAt.slice(0, 23) === st.createdUs.slice(0, 23);
+      }).map((st) => st.id));
+      want.findings = want.findings.filter((f) => !(f.startsWith('KEY_CLOSURE_INVALID|') && hidden.has(f.split('|')[1]!) && !got.findings.includes(f)));
       if (JSON.stringify(got) !== JSON.stringify(want)) diverged.push(`seed ${seed}: engine ${JSON.stringify(want)}, walk ${JSON.stringify(got)}`);
     }
     expect(diverged.slice(0, 5)).toEqual([]);
@@ -63,6 +98,16 @@ describe(`the trust walk against the engine (${recorded.engine})`, () => {
 });
 
 describe(`a walk over the key document the engine publishes (${recorded.engine})`, () => {
+  it('trusts the same keys, signs the same windows and finds the same statements as the engine\'s own walk over that document', () => {
+    const diverged: string[] = [];
+    for (const seed of seeds) {
+      const got = portVerdict(walkDocument(scenario(Number(seed)), recorded.published[seed]!));
+      const want = recorded.documents[seed]!;
+      if (JSON.stringify(got) !== JSON.stringify(want)) diverged.push(`seed ${seed}: engine ${JSON.stringify(want)}, walk ${JSON.stringify(got)}`);
+    }
+    expect(diverged.slice(0, 5)).toEqual([]);
+  }, 120_000);
+
   it('never trusts a key the engine does not, and any window it grades more loosely on a listed key is a finding on that key', () => {
     const wrong: string[] = [];
     for (const seed of seeds) {

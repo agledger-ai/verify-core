@@ -48,9 +48,13 @@ function ndjson<T>(dir: string, file: string): T[] {
 }
 
 /** Every code the walk and the chains it grades report for one dump. */
-function gradeDump(dir: string, anchors: string[]): { codes: FailureCode[]; chains: number } {
+function gradeDump(
+  dir: string,
+  anchors: string[],
+  edit: (rows: DumpKeyStatementRow[]) => DumpKeyStatementRow[] = (rows) => rows,
+): { codes: FailureCode[]; chains: number } {
   const keys = ndjson<DumpSigningKeyRow>(dir, 'vault_signing_keys.ndjson');
-  const statements = ndjson<DumpKeyStatementRow>(dir, 'vault_key_statements.ndjson');
+  const statements = edit(ndjson<DumpKeyStatementRow>(dir, 'vault_key_statements.ndjson'));
   const trust = computeKeyTrust({
     keys: keys.map(trustKeyFromDumpRow),
     statements: statements.map(keyStatementFromDumpRow),
@@ -147,6 +151,17 @@ describe('key-statement walk over the dump corpus: pass vectors pinned on the Se
     const genesis = ndjson<DumpKeyStatementRow>(dir, 'vault_key_statements.ndjson').find((s) => s.kind === 'genesis')!;
     const first = ndjson<DumpSigningKeyRow>(dir, 'vault_signing_keys.ndjson').find((k) => k.key_id === genesis.subject_key_id)!;
     expect(gradeDump(dir, [`sha256:${spkiSha256(first.public_key)}`]).codes).toContain('CHAIN_SIGNING_KEY_UNANCHORED');
+  });
+
+  it.each(vectors)('%s verifies clean with every row of vault_key_statements copied under a new id and write time, as the engine reads such a copy', (dir) => {
+    // What anything with the runtime role can do to the append-only table:
+    // INSERT ... SELECT subject_key_id, endorser_key_id, kind, statement.
+    const copied = (rows: DumpKeyStatementRow[]) => [
+      ...rows,
+      ...rows.map((r, i) => ({ ...r, id: `ffffffff-0000-4000-8000-${String(i).padStart(12, '0')}`, created_at: '2099-01-01T00:00:00.000Z' })),
+    ];
+    const { codes } = gradeDump(dir, [currentPin(dir)], copied);
+    expect(codes).toEqual([]);
   });
 
   it('dump/chain-signing-key-unanchored pinned on the vault key fails the planted entry', () => {

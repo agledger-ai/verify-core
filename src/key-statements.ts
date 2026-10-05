@@ -159,6 +159,14 @@ export interface TrustKeyInput {
   status?: 'active' | 'retired' | null;
   activatedAt?: string | null;
   retiredAt?: string | null;
+  /**
+   * Where the key was read from. `dump`: a row of a dump's
+   * `vault_signing_keys.ndjson` ({@link trustKeyFromDumpRow} sets it), a
+   * registry fact the walk holds a distrusted key to: one no trusted key has
+   * retired is KEY_CLOSURE_INVALID. Anything else, absent included, is a key
+   * document's listing.
+   */
+  source?: 'dump' | 'document';
 }
 
 /**
@@ -254,7 +262,42 @@ export interface KeyTrust {
   findings: KeyRegistryFinding[];
   /** Non-fatal: see {@link KeyTrustNote}. */
   notes: KeyTrustNote[];
+  /**
+   * Non-fatal: statements of a dump that a `distrustedKeys` key signed, that
+   * count for nothing, and that were stored before a key the walk trusts
+   * retired it (its {@link DistrustSpan} `retiredAt`). The distrust entry and
+   * that retirement account for them: they are evidence of what the key
+   * signed, listed and never a finding. One stored after that retirement, or
+   * whose dropping reopens a key, stays a finding. Empty for a key document,
+   * whose write times are not held against anything.
+   */
+  accounted: KeyTrustNote[];
+  /** Each `distrustedKeys` key, by full SPKI SHA-256 (hex): see {@link DistrustSpan}. */
+  distrustSpans: ReadonlyMap<string, DistrustSpan>;
+  /**
+   * `dump` when every statement is a dump row (and there is at least one),
+   * else `document`. Only a dump's write times are the Server's word, so only
+   * a walk over a dump marks the keys `applyKeyTrust` lets a chain entry be
+   * accounted for under (see {@link DistrustSpan}).
+   */
+  source: 'dump' | 'document';
   statements: { total: number; valid: number; invalid: number; unverifiable: number };
+}
+
+/**
+ * What a `distrustedKeys` entry covers for one key, as the engine's
+ * `distrustSpans` gives it. `cutoff`: the instant from which what the key
+ * signs counts for nothing (the entry's own, else `retiredAt`; null: trusted
+ * for nothing). `retiredAt`: the earliest retirement of the key that a key
+ * which is not distrusted signs, reached from the anchors without passing
+ * through a distrusted key, each closure's signed `retiredAt` capped at its
+ * own write time (null: none). On a dump, what the key signed before
+ * `retiredAt` and outside its trust is accounted for, and listed rather than
+ * failed; what it signed after `retiredAt` is not.
+ */
+export interface DistrustSpan {
+  cutoff: string | null;
+  retiredAt: string | null;
 }
 
 // --- Parsing the out-of-band inputs ---
@@ -328,11 +371,15 @@ export function parseDistrustedKeys(raw: string | readonly string[]): Distrusted
 }
 
 /**
- * Throw `TypeError` when a key is both pinned and distrusted, as the Server
- * refuses to boot on the same pair (`VaultKeyDistrustedError`): a key is the
- * root the walk trusts or one it must not, never both. `computeKeyTrust`
- * itself walks such a pair as the engine's walk does; a verifier calls this
- * on what its caller passed before it walks.
+ * Throw `TypeError` when a key is pinned and distrusted with no instant, as
+ * the Server refuses to boot on that pair (`VaultKeyDistrustedError`): an
+ * undated entry withdraws the key from before anything it signed, which
+ * leaves a pin nothing to vouch for. A pin beside a dated entry
+ * (`sha256:<hex>@<instant>`) is how a leaked key whose history is still
+ * needed is kept from signing anything new: the pin vouches for what it
+ * stored before the instant. `computeKeyTrust` itself walks any pair as the
+ * engine's walk does; a verifier calls this on what its caller passed before
+ * it walks.
  */
 export function assertNotPinnedAndDistrusted(
   trustAnchors: string | readonly string[] | undefined,
@@ -340,11 +387,12 @@ export function assertNotPinnedAndDistrusted(
 ): void {
   if (trustAnchors === undefined || distrustedKeys === undefined) return;
   const anchors = new Set(parseTrustAnchors(trustAnchors));
-  const both = normalizeDistrusted(distrustedKeys).find((d) => anchors.has(d.spkiSha256));
+  const both = normalizeDistrusted(distrustedKeys).find((d) => d.cutoff === null && anchors.has(d.spkiSha256));
   if (both === undefined) return;
   throw new TypeError(
-    `sha256:${both.spkiSha256} is both a trust anchor and a distrusted key. Pin a key you trust and distrust one that leaked, never the same key: `
-    + 'pin its successor and keep the distrust entry, or drop the distrust entry. The Server refuses to start with the same pair in VAULT_TRUST_ANCHORS and VAULT_DISTRUSTED_KEYS.',
+    `sha256:${both.spkiSha256} is a trust anchor and a distrusted key with no instant, which leaves the pin nothing to vouch for. `
+    + 'Give the distrust entry the instant the key leaked (sha256:<hex>@<RFC 3339 instant>, no later than its retirement) and keep the pin, which then vouches for what it signed before that instant only; '
+    + 'or, if you vouch for nothing it signed, keep the entry without an instant and drop the pin. The Server refuses to start with the same pair in VAULT_TRUST_ANCHORS and VAULT_DISTRUSTED_KEYS.',
   );
 }
 
@@ -547,6 +595,12 @@ interface CheckedKeyStatement {
   verdict: 'valid' | 'invalid' | 'unverifiable';
   detail: string | null;
   payload: KeyStatementPayload | null;
+  /** SHA-256 of the signed payload bytes, once they decode as a statement. */
+  digest: string | null;
+  /** The subject's own signature verified here (a genesis, or a succession's second half). */
+  subjectSigned: boolean;
+  /** The endorser's signature verified here. */
+  endorserSigned: boolean;
 }
 
 function checkKeyStatement(
@@ -554,8 +608,9 @@ function checkKeyStatement(
   keyByDigest: ReadonlyMap<string, { spki: string; alg: string | null }>,
 ): CheckedKeyStatement {
   const id = input.id ?? null;
+  let digest: string | null = null;
   const invalid = (detail: string, payload: KeyStatementPayload | null = null): CheckedKeyStatement =>
-    ({ input, id, verdict: 'invalid', detail, payload });
+    ({ input, id, verdict: 'invalid', detail, payload, digest: payload === null ? null : digest, subjectSigned: false, endorserSigned: false });
   const cose: readonly unknown[] = Array.isArray(input.cose) ? input.cose : [];
   const sigs = cose.map((b) => decodeSign1(b));
   if (sigs.length === 0 || sigs.some((s) => s === null)) return invalid('a signature does not decode as a tagged COSE_Sign1');
@@ -566,6 +621,7 @@ function checkKeyStatement(
   }
   const payload = decodeKeyStatementPayload(first.payloadBstr);
   if (!payload) return invalid('the payload does not decode as a key statement');
+  digest = sha256Hex(first.payloadBstr);
   if (payload.typ !== input.kind
     || (input.subjectKeyId !== undefined && payload.subject.kid !== input.subjectKeyId)
     || (input.endorserKeyId !== undefined && (payload.endorser?.kid ?? null) !== input.endorserKeyId)) {
@@ -606,12 +662,17 @@ function checkKeyStatement(
     return invalid(`a ${payload.typ} carries ${expected.length} signature(s), this one carries ${parts.length}`, payload);
   }
   let unsupported = false;
+  let subjectSigned = false;
+  let endorserSigned = false;
   for (const [i, want] of expected.entries()) {
     const outcome = checkSignature(parts[i]!, want.key, want.kid);
     if (outcome === 'bad') return invalid(`signature ${i + 1} does not verify under the key it names`, payload);
     if (outcome === 'unsupported') unsupported = true;
+    const bySubject = payload.typ === 'genesis' || (payload.typ === 'succession' && i === 1);
+    if (outcome === 'ok' && bySubject) subjectSigned = true;
+    if (outcome === 'ok' && !bySubject) endorserSigned = true;
   }
-  return { input, id, verdict: unsupported ? 'unverifiable' : 'valid', detail: null, payload };
+  return { input, id, verdict: unsupported ? 'unverifiable' : 'valid', detail: null, payload, digest, subjectSigned, endorserSigned };
 }
 
 // --- The walk ---
@@ -626,6 +687,12 @@ interface Statement {
   at: number;
   /** When it was stored, in ms: `createdAt`, or under the signed order the instant it signs. */
   storedMs: number;
+  /**
+   * Under the write order, `createdAt` in microseconds and whether it carried
+   * them (a key document) or only milliseconds (a dump); null under the
+   * signed order, where nothing says when a statement was stored.
+   */
+  written: { us: number; micro: boolean } | null;
 }
 
 /** One way trust flows: `from` vouches for `to` through statement `via`. */
@@ -649,6 +716,30 @@ function reach(anchors: ReadonlySet<string>, edges: readonly Edge[]): Set<string
     }
   }
   return out;
+}
+
+/** A microsecond count as the RFC 3339 UTC instant the statements sign. */
+function instantOfUs(us: number): string {
+  const ms = Math.floor(us / 1000);
+  return `${new Date(ms).toISOString().slice(0, 23)}${String(us - ms * 1000).padStart(3, '0')}Z`;
+}
+
+/**
+ * Whether an instant a statement signs is later than when it was stored, at
+ * the precision its write time carries: a dump's millisecond `created_at`
+ * hides the microseconds, so an instant in the same millisecond is not later.
+ * False under the signed order, where nothing says when it was stored.
+ */
+function signedAfterWrite(signed: string, s: { written: { us: number; micro: boolean } | null; storedMs: number }): boolean {
+  if (s.written === null) return false;
+  const at = instantUs(signed).us;
+  return s.written.micro ? at > s.written.us : Math.floor(at / 1000) > s.storedMs;
+}
+
+/** The earlier of an instant a statement signs and its write time (see {@link signedAfterWrite}). */
+function notAfterWrite(signed: string, s: { written: { us: number; micro: boolean } | null; storedMs: number }): string {
+  if (!signedAfterWrite(signed, s)) return signed;
+  return instantOfUs(s.written!.micro ? s.written!.us : s.storedMs * 1000);
 }
 
 /** The instant a statement signs, which orders it when the source carries no write time. */
@@ -776,16 +867,29 @@ export function computeKeyTrust(input: ComputeKeyTrustInput): KeyTrust {
   // forced one or a distrusted key voids them all, and a document that did
   // not come from the Server could list the succession first anyway.
   const closureLast = (c: CheckedKeyStatement): number => (order === 'signed' && c.payload?.typ === 'closure' ? 1 : 0);
+  // A statement whose signed payload an earlier one already carries says
+  // nothing new: a copy of a row (anything with write access to the database
+  // can write one), or the same payload signed again. Only the first, in
+  // write order, takes part, as the engine reads it; the database stamps the
+  // write time, so a copy always lands after what it copies.
+  const seenPayload = new Set<string>();
   const inWriteOrder: Statement[] = checked
     .map(place)
     .sort((a, b) => (a.k < b.k ? -1 : a.k > b.k ? 1 : a.r - b.r || tieById(a, b) || a.i - b.i))
-    .flatMap(({ c, k }, at) => c.verdict === 'invalid' || c.payload === null ? [] : [{
+    .filter(({ c }) => {
+      if (c.verdict === 'invalid' || c.payload === null || c.digest === null) return true;
+      if (seenPayload.has(c.digest)) return false;
+      seenPayload.add(c.digest);
+      return true;
+    })
+    .flatMap(({ c, k, micro }, at) => c.verdict === 'invalid' || c.payload === null ? [] : [{
       check: c,
       payload: c.payload,
       subject: c.payload.subject.spkiSha256,
       endorser: c.payload.endorser?.spkiSha256 ?? null,
       at,
       storedMs: typeof k === 'number' ? rfc3339Ms(c.input.createdAt!) : instantMs(k),
+      written: typeof k === 'number' ? { us: k, micro } : null,
     }]);
   const valid = inWriteOrder.filter((s) => s.check.verdict === 'valid');
 
@@ -818,22 +922,36 @@ export function computeKeyTrust(input: ComputeKeyTrustInput): KeyTrust {
   // Distrusted keys and the instant each one's statements stop counting from.
   const distrust = new Set(distrustedKeys.map((d) => d.spkiSha256));
   const cutoffs = new Map<string, { at: number; instant: string } | null>();
+  const distrustSpans = new Map<string, DistrustSpan>();
   if (distrust.size > 0) {
     const clear = reach(anchors, edges.filter((e) => !distrust.has(e.from)));
     for (const d of distrustedKeys) {
-      let instant = d.cutoff;
-      if (instant === null) {
-        for (const s of valid) {
-          if (s.subject !== d.spkiSha256 || s.payload.typ !== 'closure') continue;
-          const by = s.endorser;
-          const retiredAt = s.payload.subject.retiredAt;
-          if (by === null || distrust.has(by) || !clear.has(by) || retiredAt === undefined) continue;
-          if (instant === null || retiredAt < instant) instant = retiredAt;
-        }
+      // The retirement a key the walk still trusts signed for it, no later
+      // than that closure's own write time: a retirement dated ahead must not
+      // stretch what the entry accounts for.
+      let retiredBy: string | null = null;
+      for (const s of valid) {
+        if (s.subject !== d.spkiSha256 || s.payload.typ !== 'closure') continue;
+        const by = s.endorser;
+        const signed = s.payload.subject.retiredAt;
+        if (by === null || distrust.has(by) || !clear.has(by) || signed === undefined) continue;
+        const retiredAt = notAfterWrite(signed, s);
+        if (retiredBy === null || retiredAt < retiredBy) retiredBy = retiredAt;
       }
+      const instant = d.cutoff ?? retiredBy;
       cutoffs.set(d.spkiSha256, instant === null ? null : { at: instantMs(instant), instant });
+      distrustSpans.set(d.spkiSha256, { cutoff: instant, retiredAt: retiredBy });
     }
   }
+  /**
+   * A dump statement a distrusted key signed and stored before a key the walk
+   * still trusts retired it: the distrust entry and that retirement account
+   * for it.
+   */
+  const accountedFor = (s: Statement, signer: string): boolean => {
+    const retiredAt = distrustSpans.get(signer)?.retiredAt ?? null;
+    return retiredAt !== null && s.check.input.source === 'dump' && s.written !== null && s.storedMs < instantMs(retiredAt);
+  };
   /**
    * Signed by a distrusted key at or after its cutoff: counts for nothing.
    * Only a dump row's write time is held against the cutoff, and only as far
@@ -862,6 +980,7 @@ export function computeKeyTrust(input: ComputeKeyTrustInput): KeyTrust {
     return cutoff === null || cutoff === undefined || (order === 'written' && s.storedMs >= cutoff.at);
   };
   const notes: KeyTrustNote[] = [];
+  const accounted: KeyTrustNote[] = [];
 
   // Pass 1, then the closures it lets count.
   const pass1 = reach(anchors, edges.filter((e) => !distrusted(e.via, e.from)));
@@ -870,7 +989,9 @@ export function computeKeyTrust(input: ComputeKeyTrustInput): KeyTrust {
   const closedAt = new Map<string, number>();
   const closedWindow = new Map<string, string>();
   const forced = new Set<string>();
+  const closuresOf = new Map<string, Statement[]>();
   for (const c of counting) {
+    closuresOf.set(c.subject, [...closuresOf.get(c.subject) ?? [], c]);
     if (!closedAt.has(c.subject)) closedAt.set(c.subject, c.at);
     const retiredAt = c.payload.subject.retiredAt;
     if (retiredAt !== undefined && (closedWindow.get(c.subject) ?? retiredAt) >= retiredAt) closedWindow.set(c.subject, retiredAt);
@@ -893,14 +1014,28 @@ export function computeKeyTrust(input: ComputeKeyTrustInput): KeyTrust {
   // reached through bytes anyone with database access writes as easily as the
   // Server: it is unanchored.
   const undecided = new Set<string>();
+  // The undecided keys one step from the trusted set, through the half of the
+  // statement this host verified. Past that step every signature on the path
+  // is one anything with database access could have written, so nothing
+  // further is vouched for. The Server publishes these with their admission.
+  const vouched = new Set<string>();
   const unverifiable = inWriteOrder.filter((s) => s.check.verdict === 'unverifiable');
   if (unverifiable.length > 0) {
     const all = [...edges, ...unverifiable.flatMap(edgesOf)].filter((e) => !voided(e));
     for (const d of reach(anchors, all)) if (!trusted.has(d)) undecided.add(d);
+    for (const edge of unverifiable.flatMap(edgesOf)) {
+      if (!trusted.has(edge.from) || voided(edge) || trusted.has(edge.to)) continue;
+      const forward = edge.from === edge.via.endorser;
+      if (forward ? edge.via.check.endorserSigned : edge.via.check.subjectSigned) vouched.add(edge.to);
+    }
+    for (const d of vouched) undecided.add(d);
     for (const d of untrusted) undecided.delete(d);
     for (const d of undecided) {
       const known = keyByDigest.get(d);
-      if (!known || materialFor(known.spki, known.alg).alg !== 'unsupported') undecided.delete(d);
+      if (!known || materialFor(known.spki, known.alg).alg !== 'unsupported') {
+        undecided.delete(d);
+        vouched.delete(d);
+      }
     }
   }
 
@@ -948,10 +1083,22 @@ export function computeKeyTrust(input: ComputeKeyTrustInput): KeyTrust {
     const from = s.payload.subject.activatedAt;
     if ((firstActivation.get(s.subject) ?? from) >= from) firstActivation.set(s.subject, from);
   }
+  /** What to tell an auditor who holds no other evidence of a key leaking: pin it if honest, never once it is distrusted. */
+  const pinRemedy = (e: string, by: string): string => (cutoffs.has(e)
+    ? ''
+    : ` If ${by} is honest, pin sha256:${e} in trustAnchors (VAULT_TRUST_ANCHORS on the Server, which publishes it).`);
   for (const s of valid) {
     const e = s.endorser;
     const by = s.payload.endorser?.kid ?? '';
-    if (e !== null && distrusted(s, e) && !voidedByStoredTime(s, e)) {
+    const voided = e !== null && distrusted(s, e);
+    // The admission of a key the walk trusts by another path (its own pin, as
+    // when a fresh key was staged with the leaked one as its predecessor after
+    // the leak), signed by a distrusted key from its cutoff on: the voided
+    // endorsement takes nothing away and grants nothing, so it is no finding.
+    // Only the key's first admission: a later one is a second admission,
+    // which cuts the key's edge back and redates it, and stays a finding.
+    if (voided && voidedByStoredTime(s, e) && s.payload.typ !== 'closure' && trusted.has(s.subject) && admissions.get(s.subject) === s) continue;
+    if (voided && !voidedByStoredTime(s, e)) {
       // Voided only because a key document's time is not held against the
       // cutoff: it admits nothing, but a statement the engine would count is
       // no finding. It still dates windows and cuts edges back, so it can
@@ -962,7 +1109,7 @@ export function computeKeyTrust(input: ComputeKeyTrustInput): KeyTrust {
         statementId: s.check.id,
         detail: `a ${s.payload.typ} by ${by}, which distrustedKeys distrusts from ${cutoff.instant}; it admits nothing here, because a key document's write time${typeof s.check.input.createdAt === 'string' ? ` (${s.check.input.createdAt})` : ''} is not signed and is not held against the cutoff. A dump taken from the Server holds it to the time it was stored.`,
       });
-    } else if (e !== null && distrusted(s, e)) {
+    } else if (voided) {
       const cutoff = cutoffs.get(e);
       const closed = s.payload.subject.retiredAt;
       const now = byDigest.get(s.subject);
@@ -972,39 +1119,75 @@ export function computeKeyTrust(input: ComputeKeyTrustInput): KeyTrust {
         && (ends === null || ends > closed)
         ? ` It retired ${s.payload.subject.kid} at ${closed}, and no closure that counts retires it that early now; if ${s.payload.subject.kid} leaked as well, add sha256:${s.subject} to distrustedKeys too.`
         : '';
-      finding(s.payload.typ === 'closure' ? 'KEY_CLOSURE_INVALID' : 'KEY_STATEMENT_INVALID', s,
-        `a ${s.payload.typ} by ${by}, which distrustedKeys distrusts ${cutoff ? `from ${cutoff.instant}` : 'entirely'}; it counts for nothing.${reopened}`);
+      const code = s.payload.typ === 'closure' ? 'KEY_CLOSURE_INVALID' : 'KEY_STATEMENT_INVALID';
+      const what = `a ${s.payload.typ} by ${by}, which distrustedKeys distrusts ${cutoff ? `from ${cutoff.instant}` : 'entirely'}; it counts for nothing.`;
+      if (s.check.input.source !== 'dump' || s.written === null) {
+        finding(code, s, `${what}${reopened}`);
+      } else {
+        // A dump row: held to when the Server stored it.
+        const retiredBy = distrustSpans.get(e)?.retiredAt ?? null;
+        if (reopened === '' && accountedFor(s, e)) {
+          accounted.push({
+            keyId: s.payload.subject.kid,
+            statementId: s.check.id,
+            detail: `${what} Stored before ${retiredBy ?? ''}, when a key the walk trusts retired ${by}, so the distrust entry accounts for it: evidence of what ${by} signed, not a finding.`,
+          });
+        } else {
+          const after = retiredBy === null
+            ? ` No closure a key the walk trusts signs retires ${by}, so nothing bounds what the distrust entry accounts for: retire ${by} with force on the Server from a process on a key you hold.`
+            : !accountedFor(s, e) ? ` It was stored after ${retiredBy}, when a key the walk trusts retired ${by}: ${by}'s private half is still in use by someone with write access to the Server's database.` : '';
+          finding(code, s, `${what}${reopened}${after}`);
+        }
+      }
       continue;
     }
     if (s.payload.typ === 'closure') {
       const retiredAt = s.payload.subject.retiredAt ?? '';
       const activated = byDigest.get(s.subject)?.trusted === true ? firstActivation.get(s.subject) ?? null : null;
       const signerClosed = e === null ? undefined : closedAt.get(e);
-      const distrustHint = `If ${by} leaked or was retired, distrustedKeys sha256:${e ?? ''} (VAULT_DISTRUSTED_KEYS on the Server) makes what it signed from its retirement on count for nothing.`;
+      const before = findings.length;
+      // The instant to suggest when nothing earlier is known: the signer's own
+      // retirement, each closure's signed instant capped at its write time (a
+      // closure dated ahead voids nothing), or else this closure's write time.
+      // A pin on the signer stays, since the entry is dated.
+      const own = e === null ? [] : closuresOf.get(e) ?? [];
+      let until: string | null = s.written === null ? null : instantOfUs(s.written.micro ? s.written.us : s.storedMs * 1000);
+      for (const c of own) {
+        const capped = notAfterWrite(c.payload.subject.retiredAt ?? '', c);
+        if (capped !== '' && (until === null || capped < until)) until = capped;
+      }
+      const known = until === null ? '' : `; if nothing earlier is known, ${until}, ${own.length > 0 ? 'its retirement' : 'when this closure was stored'}`;
+      const distrustHint = `If ${by} leaked, give distrustedKeys sha256:${e ?? ''}@<instant> (VAULT_DISTRUSTED_KEYS on every Server process), the instant being the earliest time ${by} may have leaked${known}. What it signed from that instant on, this closure included, counts for nothing. Keep a trustAnchors pin on ${by} if it has one, and date the entry no later than the leak: beside a pin, everything ${by} stored before the instant still counts.`;
       if (e === null || !pass1.has(e)) finding('KEY_CLOSURE_INVALID', s, 'the closure is signed by a key that is not anchored');
       else if (signerClosed !== undefined && s.at > signerClosed) {
         finding('KEY_CLOSURE_INVALID', s, `the closure is signed by ${by} after its own retirement, and still counts: it ends ${s.payload.subject.kid}'s window at ${retiredAt}. ${distrustHint}`);
       } else if (activated !== null && retiredAt < activated) {
         finding('KEY_CLOSURE_INVALID', s, `the closure retires ${s.payload.subject.kid} at ${retiredAt}, before the ${activated} it was activated, and still counts. ${distrustHint}`);
-      } else if (!trusted.has(e) && (trusted.has(s.subject) || undecided.has(s.subject))) {
-        // The engine publishes only trusted keys and the undecided ones one
-        // step from them, so a walk over the subject's key document cannot
-        // verify this closure. It reads differently from the engine only
-        // where no closure a published key signed dates the window as early,
-        // or forces it too.
-        const published = counting.filter((c) => c.subject === s.subject && trusted.has(c.endorser ?? ''));
+      } else if (!trusted.has(e) && (trusted.has(s.subject) || vouched.has(s.subject))) {
+        // The Server publishes only trusted and vouched keys, and every
+        // counting closure of a published key with it, so a walk over the
+        // subject's key document cannot verify this one: every document and
+        // every audit export carrying it fails offline, whether or not a
+        // published closure dates the window as early.
+        const published = (closuresOf.get(s.subject) ?? []).filter((c) => trusted.has(c.endorser ?? ''));
         const earlier = published.every((c) => retiredAt < (c.payload.subject.retiredAt ?? ''));
         const forcedAlone = s.payload.forced === true && !published.some((c) => c.payload.forced === true);
-        if (earlier || forcedAlone) {
-          const effect = earlier ? `ends ${s.payload.subject.kid}'s window at ${retiredAt}` : `retires ${s.payload.subject.kid} with force`;
-          const at = typeof s.check.input.createdAt === 'string' ? `@${s.check.input.createdAt}` : '';
-          // A distrusted signer cannot be pinned; on a key document its
-          // closure still counts, since a closure only narrows trust.
-          const remedy = cutoffs.has(e)
-            ? `${by} is in distrustedKeys, and a closure it signed in a key document still counts here, since a closure only narrows trust; the Server counts it for nothing only when it was stored at or after the cutoff.`
-            : `If ${by} is honest, pin sha256:${e} in trustAnchors (VAULT_TRUST_ANCHORS on the Server, which publishes it); if it leaked, distrustedKeys sha256:${e}${at} (VAULT_DISTRUSTED_KEYS on the Server) makes this closure, and what ${by} signed after it, count for nothing.`;
-          finding('KEY_CLOSURE_INVALID', s, `the closure is signed by ${by}, which is reached but not anchored, and still counts: it ${effect}, and no key surface publishes ${by}, so an offline walk over the published statements cannot verify it and reads ${s.payload.subject.kid} as the engine does not. ${remedy}`);
-        }
+        const effect = earlier
+          ? `: it ends ${s.payload.subject.kid}'s window at ${retiredAt}, earlier than any closure a published key signs`
+          : forcedAlone ? `: it retires ${s.payload.subject.kid} with force, which no closure a published key signs does` : '';
+        const at = typeof s.check.input.createdAt === 'string' ? `@${s.check.input.createdAt}` : '';
+        // A distrusted signer is never named as a pin. Its closure counts here
+        // only where it was stored before the cutoff, or is in a key document,
+        // where a closure only narrows trust.
+        const remedy = cutoffs.has(e)
+          ? ` ${by} is in distrustedKeys, and this closure still counts: ${s.check.input.source === 'dump' && s.written !== null ? `it was stored before the cutoff, so if ${by} leaked earlier, date its entry no later than ${s.check.input.createdAt ?? ''}` : 'a closure it signed in a key document still counts here, since a closure only narrows trust; the Server counts it for nothing only when it was stored at or after the cutoff'}.`
+          : `${pinRemedy(e, by)} If it leaked, distrustedKeys sha256:${e}${at} (VAULT_DISTRUSTED_KEYS on the Server) makes this closure, and what ${by} signed after it, count for nothing.`;
+        finding('KEY_CLOSURE_INVALID', s, `the closure is signed by ${by}, which is reached but not anchored, and still counts${effect}. No key surface publishes ${by}, so an offline walk over the published statements cannot verify it, and every audit export carrying them fails offline verification.${remedy}`);
+      }
+      // A retirement dated ahead of when it was stored: the Server never signs
+      // one, and it keeps its subject open until then.
+      if (e !== null && pass1.has(e) && signedAfterWrite(retiredAt, s) && findings.length === before) {
+        finding('KEY_CLOSURE_INVALID', s, `the closure dates ${s.payload.subject.kid}'s retirement at ${retiredAt}, after ${s.check.input.createdAt ?? ''} when it was stored, and still counts: ${s.payload.subject.kid}'s window ends then. The Server never signs a retirement ahead of the call; if ${by} did not sign this, ${distrustHint}`);
       }
       continue;
     }
@@ -1013,11 +1196,30 @@ export function computeKeyTrust(input: ComputeKeyTrustInput): KeyTrust {
     } else if (s.at > (closedAt.get(s.subject) ?? Infinity)) {
       finding('KEY_STATEMENT_INVALID', s, `a ${s.payload.typ} of a key stored after its closure; it admits nothing`);
     } else if (admissions.get(s.subject) !== s) {
-      finding('KEY_STATEMENT_INVALID', s, `a ${s.payload.typ} its subject signed after it was already admitted`);
+      // A key is admitted once. What it signs itself in with later is a
+      // leaked key naming a predecessor or redating itself.
+      finding('KEY_STATEMENT_INVALID', s, `a ${s.payload.typ} its subject signed after it was already admitted: ${s.payload.subject.kid}'s private half in other hands. It is the record of the leak, and no setting clears it: move every Server process off ${s.payload.subject.kid}, retire it with force from the key they hold, and give distrustedKeys sha256:${s.subject}@<the instant it leaked> (VAULT_DISTRUSTED_KEYS on every Server process), which stops what its leaked half signs from then on counting.`);
+    } else if (e !== null && trusted.has(s.subject) && !trusted.has(e) && !vouched.has(e)) {
+      // The admission of a key trusted by another path (a pin, or the edge
+      // back from a key it admitted) whose endorser the walk does not trust:
+      // history a forced closure cut off. The Server publishes it with the
+      // key and does not publish its endorser, so no offline walk verifies it.
+      finding('KEY_STATEMENT_INVALID', s, `${s.payload.subject.kid} is trusted, and its admission is a ${s.payload.typ} signed by ${by}, which the walk does not trust (a forced closure cut it off, or it was never linked). No key surface publishes ${by}, so an offline walk over the published statements cannot verify it, and every audit export carrying them fails offline verification.${pinRemedy(e, by)}`);
     } else if (e !== null && trusted.has(e)) {
       const closed = closedAt.get(e);
       if (closed !== undefined && s.at > closed) finding('KEY_STATEMENT_INVALID', s, `a ${s.payload.typ} by ${by} stored after its closure`);
     }
+  }
+
+  // A vouched key is published with its admission, which this host cannot
+  // check. Where that admission's endorser is not published either, no
+  // verifier off-host can check it from what is published.
+  for (const d of vouched) {
+    const s = admissions.get(d);
+    const e = s?.endorser ?? null;
+    if (!s || e === null || trusted.has(e) || vouched.has(e)) continue;
+    const by = s.payload.endorser?.kid ?? '';
+    finding('KEY_STATEMENT_INVALID', s, `${s.payload.subject.kid} is reached through a trusted key's signature, and its admission is a ${s.payload.typ} signed by ${by}, which no key surface publishes, so an offline walk over the published statements cannot verify it, and every audit export carrying them fails offline verification.${pinRemedy(e, by)}`);
   }
 
   // Keys an admission names that this walk could not verify. A key document
@@ -1059,6 +1261,22 @@ export function computeKeyTrust(input: ComputeKeyTrustInput): KeyTrust {
     }
   }
 
+  // A distrusted key the dump's registry lists that no key the walk trusts
+  // has retired: nothing bounds what its entry accounts for, so what it
+  // signed stays unaccounted until a retirement does. A registry fact, so a
+  // key document's listing leaves it out.
+  for (const key of listedKeys) {
+    const digest = spkiSha256(key.publicKey);
+    const span = distrustSpans.get(digest);
+    if (key.source !== 'dump' || span === undefined || span.retiredAt !== null || key.keyId !== digest.slice(0, 16)) continue;
+    findings.push({
+      code: 'KEY_CLOSURE_INVALID',
+      keyId: key.keyId,
+      statementId: null,
+      detail: `distrustedKeys names ${key.keyId} and no closure signed by a key the walk trusts retires it, so nothing bounds what the entry accounts for: chain entries ${key.keyId} signed fail until a retirement does. Retire it with force on the Server (POST /v1/admin/vault/signing-keys/${key.keyId}/retire with {"force": true}) from a process on a key you hold; what it signed before that retirement is then accounted for and listed, and anything it signs after it is reported.`,
+    });
+  }
+
   return {
     order,
     anchors: anchorDigests.map((d) => `sha256:${d}`),
@@ -1067,6 +1285,9 @@ export function computeKeyTrust(input: ComputeKeyTrustInput): KeyTrust {
     undecided,
     findings,
     notes,
+    accounted,
+    distrustSpans,
+    source: statementInputs.length > 0 && statementInputs.every((st) => st.source === 'dump') ? 'dump' : 'document',
     statements: {
       total: checked.length,
       valid: checked.filter((c) => c.verdict === 'valid').length,
@@ -1125,6 +1346,7 @@ export function trustKeyFromDumpRow(row: DumpSigningKeyRow): TrustKeyInput {
     status: row.status === 'active' || row.status === 'retired' ? row.status : null,
     activatedAt: row.activated_at ?? null,
     retiredAt: row.retired_at ?? null,
+    source: 'dump',
   };
 }
 
@@ -1235,7 +1457,9 @@ export function keyStatementsFromVerificationKeys(doc: VerificationKeysDocument)
  * as the engine grades entries. An anchored key no statement dates carries no
  * edge on that side. A key is anchored only when its key id is the
  * fingerprint of its own SPKI: a row filed under another key's id names that
- * key's entries, and is anchored to nothing.
+ * key's entries, and is anchored to nothing. On a walk over a dump, a key a
+ * `distrustedKeys` entry names also carries its {@link DistrustSpan}
+ * (`distrustSpan`), which lets `verifyChain` account for what it signed.
  */
 export function applyKeyTrust(registry: KeyRegistry, trust: KeyTrust): KeyRegistry {
   const out = new Map<string, VerificationKey>();
@@ -1247,6 +1471,8 @@ export function applyKeyTrust(registry: KeyRegistry, trust: KeyTrust): KeyRegist
     const { activatedAt: _a, retiredAt: _r, ...rest } = key;
     const next: VerificationKey = { ...rest, trust: state };
     const signed = trust.byDigest.get(digest);
+    const span = bound && trust.source === 'dump' ? trust.distrustSpans.get(digest) : undefined;
+    if (span !== undefined) next.distrustSpan = { cutoff: span.cutoff, retiredAt: span.retiredAt };
     if (anchored && signed) {
       if (signed.activatedAt !== null) next.activatedAt = signed.activatedAt;
       if (signed.retiredAt !== null) next.retiredAt = signed.retiredAt;
@@ -1313,6 +1539,12 @@ export interface KeyTrustReport {
   findings: KeyRegistryFinding[];
   /** Non-fatal notes from the walk (see {@link KeyTrustNote}); they never fail a verdict. */
   notes: KeyTrustNote[];
+  /**
+   * Non-fatal: the statements of a dump a `distrustedKeys` key signed that its
+   * entry and a trusted key's retirement of it account for (see
+   * {@link KeyTrust.accounted}). Listed, never a finding.
+   */
+  accounted: KeyTrustNote[];
 }
 
 /**
@@ -1337,6 +1569,7 @@ export function reportKeyTrust(registry: KeyRegistry, trust: KeyTrust | null, an
       undecidedKeyIds: [],
       findings: [],
       notes: [],
+      accounted: [],
     };
   }
   const unanchored = ids('unanchored');
@@ -1354,6 +1587,7 @@ export function reportKeyTrust(registry: KeyRegistry, trust: KeyTrust | null, an
     undecidedKeyIds: ids('undecided'),
     findings: trust.findings,
     notes: trust.notes,
+    accounted: trust.accounted,
   };
 }
 
