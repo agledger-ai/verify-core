@@ -1142,9 +1142,10 @@ describe('the trust walk on random registries', () => {
 
   /** The model, restated from its definition over statements whose signatures all verify. */
   function reference(statements: SimStatement[], anchors: ReadonlySet<string>) {
-    // A statement repeating an earlier one's signed payload says nothing new.
+    // A dump row repeating an earlier one's signed payload says nothing new.
     const seen = new Set<string>();
     const order = inWriteOrder(statements).filter((s) => {
+      if (s.source !== 'dump') return true;
       const payload = Buffer.from(encodePayload(s.payload)).toString('hex');
       if (seen.has(payload)) return false;
       seen.add(payload);
@@ -1387,5 +1388,66 @@ describe('distrusted keys over a key document (no write order)', () => {
     const distrust = [{ spkiSha256: c.digest, cutoff: null }];
     expect(walk([], statements, [n.digest], distrust).trusted.has(x.digest)).toBe(false);
     expect(walk([], asDocument(statements), [n.digest], distrust).trusted.has(x.digest)).toBe(false);
+  });
+});
+
+describe('narrower than the engine where its reading accounts for what should fail', () => {
+  const at = (m: number) => `2026-09-02T00:${String(m).padStart(2, '0')}:00.000000Z`;
+
+  it('a key document copy dated earlier does not push the published statement aside', () => {
+    // E pinned, N closes E at 00:02, and E admits K at 00:05: a statement
+    // stored after its signer's closure. A copy of it dated 00:01:30 must not
+    // stand in for it, since a document's createdAt is its holder's word.
+    const e = makeKey();
+    const n = makeKey();
+    const k = makeKey();
+    const docOf = (s: Stored, id: string, createdAt: string): KeyStatementInput => ({ id, kind: s.kind, subjectKeyId: s.subjectKeyId!, source: 'document', cose: s.cose, createdAt });
+    const supplied = [
+      docOf(statement('genesis', e, { signers: [e], activatedAt: T0 }), 'supplied:1', at(0)),
+      docOf(statement('genesis', n, { signers: [n], activatedAt: at(1) }), 'supplied:2', at(1)),
+      docOf(statement('closure', e, { endorser: n, signers: [n], retiredAt: at(2) }), 'supplied:3', at(2)),
+    ];
+    const sK = statement('succession', k, { endorser: e, signers: [e, k], activatedAt: at(5) });
+    const keys = [e, n, k].map((x) => ({ keyId: x.kid, publicKey: x.publicKey }));
+    const honest = walk(keys, [...supplied, docOf(sK, 'supplied:4', at(5))], [e.digest, n.digest]);
+    const copied = walk(keys, [docOf(sK, 'copy:1', '2026-09-02T00:01:30.000000Z'), ...supplied, docOf(sK, 'supplied:4', at(5))], [e.digest, n.digest]);
+    expect(honest.findings.map((f) => f.code)).toEqual(['KEY_STATEMENT_INVALID']);
+    expect(copied.findings.length).toBeGreaterThan(0);
+  });
+
+  it('only a retirement a key the walk trusts signed bounds what a distrust entry accounts for', () => {
+    // F leaked and staged M and M2; N force-retired F; M is distrusted. M2,
+    // cut off by that forced closure, retires M: that bounds nothing.
+    const f = makeKey();
+    const m = makeKey();
+    const m2 = makeKey();
+    const n = makeKey();
+    const statements = [
+      statement('genesis', f, { signers: [f], activatedAt: T0, createdAt: T0 }),
+      statement('succession', m, { endorser: f, signers: [f, m], activatedAt: at(1), createdAt: at(1) }),
+      statement('succession', m2, { endorser: f, signers: [f, m2], activatedAt: at(1), createdAt: at(2) }),
+      statement('genesis', n, { signers: [n], activatedAt: at(3), createdAt: at(3) }),
+      statement('closure', f, { endorser: n, signers: [n], retiredAt: at(3), forced: true, createdAt: at(4) }),
+      statement('closure', m, { endorser: m2, signers: [m2], retiredAt: at(50), createdAt: at(50) }),
+    ];
+    const trust = walk([row(f, T0, at(3)), row(m, at(1)), row(m2, at(1)), row(n, at(3))], statements, [f.digest, n.digest], [{ spkiSha256: m.digest, cutoff: null }]);
+    expect(trust.distrustSpans.get(m.digest)!.retiredAt).toBeNull();
+    expect(trust.findings.filter((x) => x.statementId === null && x.keyId === m.kid).map((x) => x.code)).toEqual(['KEY_CLOSURE_INVALID']);
+  });
+
+  it('a later admission of a trusted key that the key signed is a finding, whichever distrusted key co-signed it', () => {
+    const a = makeKey();
+    const l = makeKey();
+    const x = makeKey();
+    const later = statement('succession', x, { endorser: l, signers: [l, x], activatedAt: at(4), createdAt: at(4) });
+    const trust = walk([row(a, T0), row(l, at(1), at(10)), row(x, at(2))], [
+      statement('genesis', a, { signers: [a], activatedAt: T0, createdAt: T0 }),
+      statement('succession', l, { endorser: a, signers: [a, l], activatedAt: at(1), createdAt: at(1) }),
+      statement('succession', x, { endorser: a, signers: [a, x], activatedAt: at(2), createdAt: at(2) }),
+      later,
+      statement('closure', l, { endorser: a, signers: [a], retiredAt: at(10), forced: true, createdAt: at(10) }),
+    ], [a.digest], [{ spkiSha256: l.digest, cutoff: at(3) }]);
+    expect(trust.accounted).toEqual([]);
+    expect(trust.findings.find((f) => f.statementId === later.id)?.detail).toContain('signed after it was already admitted');
   });
 });

@@ -262,12 +262,14 @@ verified: with none, the status becomes `no_anchored_signature`.
 checkpoints and read-log rows, and fails closed on a row with no readable time
 once signing began.
 
-A statement repeating an earlier one's signed payload counts once, at its
+A dump row repeating an earlier row's signed payload counts once, at its
 first write: a row copied in the database under a new id and time says
-nothing new, as the engine reads it.
+nothing new, as the engine reads it. On a key document a copy stays a second
+statement, since its `createdAt` is the holder's word.
 
 On a dump, a `distrustedKeys` key that a key the walk trusts has retired is
-bounded by that retirement (its `DistrustSpan` in `trust.distrustSpans`), and
+bounded by that retirement (its `DistrustSpan` in `trust.distrustSpans`; only a
+retirement by a key the walk trusts counts, which is narrower than the engine), and
 what it signed before then is accounted for rather than failed, as the engine's
 scan lists it: a key statement it signed that counts for nothing is listed in
 `trust.accounted` (and the report's `accounted`) instead of `findings`, and a

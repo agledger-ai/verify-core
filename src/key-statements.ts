@@ -867,17 +867,20 @@ export function computeKeyTrust(input: ComputeKeyTrustInput): KeyTrust {
   // forced one or a distrusted key voids them all, and a document that did
   // not come from the Server could list the succession first anyway.
   const closureLast = (c: CheckedKeyStatement): number => (order === 'signed' && c.payload?.typ === 'closure' ? 1 : 0);
-  // A statement whose signed payload an earlier one already carries says
+  // A dump row whose signed payload an earlier row already carries says
   // nothing new: a copy of a row (anything with write access to the database
   // can write one), or the same payload signed again. Only the first, in
   // write order, takes part, as the engine reads it; the database stamps the
-  // write time, so a copy always lands after what it copies.
+  // write time, so a copy always lands after what it copies. A key document's
+  // write time is its holder's word, so there a copy dated earlier would push
+  // the published statement aside: on a document a copy stays a second
+  // statement, which only ever narrows trust, and the Server publishes none.
   const seenPayload = new Set<string>();
   const inWriteOrder: Statement[] = checked
     .map(place)
     .sort((a, b) => (a.k < b.k ? -1 : a.k > b.k ? 1 : a.r - b.r || tieById(a, b) || a.i - b.i))
     .filter(({ c }) => {
-      if (c.verdict === 'invalid' || c.payload === null || c.digest === null) return true;
+      if (c.verdict === 'invalid' || c.payload === null || c.digest === null || c.input.source !== 'dump') return true;
       if (seenPayload.has(c.digest)) return false;
       seenPayload.add(c.digest);
       return true;
@@ -1007,6 +1010,25 @@ export function computeKeyTrust(input: ComputeKeyTrustInput): KeyTrust {
   const trusted = reach(anchors, edges.filter((e) => !voided(e)));
   const untrusted = [...cutoffs].filter(([, c]) => c === null).map(([d]) => d);
   for (const d of untrusted) trusted.delete(d);
+  // What a distrust entry accounts for is bounded only by a retirement a key
+  // the walk trusts signed. The engine bounds it by any key reached without a
+  // distrusted key, a forced closure's cut-off keys included, so a key cut off
+  // from a leaked one could retire a distrusted key it also holds and have
+  // what that key forged read as accounted for. Only a signer the walk
+  // trusts and reaches without a distrusted key bounds it here: narrower than
+  // the engine, never wider; the cutoff a bound gives an undated entry is the
+  // engine's.
+  const clearOfDistrust = reach(anchors, edges.filter((e) => !distrust.has(e.from)));
+  for (const [d, span] of distrustSpans) {
+    let retiredBy: string | null = null;
+    for (const s of valid) {
+      if (s.subject !== d || s.payload.typ !== 'closure' || s.endorser === null || distrust.has(s.endorser)
+        || !clearOfDistrust.has(s.endorser) || !trusted.has(s.endorser)) continue;
+      const retiredAt = notAfterWrite(s.payload.subject.retiredAt!, s);
+      if (retiredBy === null || retiredAt < retiredBy) retiredBy = retiredAt;
+    }
+    distrustSpans.set(d, { cutoff: span.cutoff, retiredAt: retiredBy });
+  }
 
   // Keys this host cannot decide: reached only through a statement signed
   // under an algorithm it cannot compute, and of such an algorithm themselves.
@@ -1126,7 +1148,13 @@ export function computeKeyTrust(input: ComputeKeyTrustInput): KeyTrust {
       } else {
         // A dump row: held to when the Server stored it.
         const retiredBy = distrustSpans.get(e)?.retiredAt ?? null;
-        if (reopened === '' && accountedFor(s, e)) {
+        // A later admission of a trusted key that the key itself signed is
+        // the record of its own half leaking, whoever co-signed it: never
+        // accounted for. Narrower than the engine, never wider.
+        const leakedSubject = s.payload.typ !== 'closure' && admissions.get(s.subject) !== s && s.check.subjectSigned && trusted.has(s.subject);
+        if (leakedSubject) {
+          finding(code, s, `${what} It is also a ${s.payload.typ} ${s.payload.subject.kid} signed after it was already admitted: ${s.payload.subject.kid}'s private half in other hands, which no distrust entry for ${by} accounts for. Move every Server process off ${s.payload.subject.kid}, retire it with force from the key they hold, and give distrustedKeys sha256:${s.subject}@<the instant it leaked> (VAULT_DISTRUSTED_KEYS on every Server process).`);
+        } else if (reopened === '' && accountedFor(s, e)) {
           accounted.push({
             keyId: s.payload.subject.kid,
             statementId: s.check.id,
