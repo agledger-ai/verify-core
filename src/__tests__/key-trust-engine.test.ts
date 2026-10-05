@@ -2,13 +2,12 @@ import { readFileSync } from 'node:fs';
 import { decode as cborDecode } from 'cborg';
 import { describe, expect, it } from 'vitest';
 import { decodeCoseSign1 } from '../primitives.js';
-import { computeKeyTrust, keyStatementsFromVerificationKeys, type KeyTrust } from '../key-statements.js';
+import { computeKeyTrust, keyStatementsFromVerificationKeys, type KeyTrust, type VerificationKeysDocument } from '../key-statements.js';
 import {
   POOL,
   documentOf,
   portInput,
   portInputAtMicroseconds,
-  narrowerOnly,
   portVerdict,
   prng,
   scenario,
@@ -70,7 +69,6 @@ describe(`the trust walk against the engine (${recorded.engine})`, () => {
   it('trusts the same keys, signs the same windows and finds the same statements on every recorded registry', () => {
     expect(seeds.length).toBeGreaterThanOrEqual(1000);
     const diverged: string[] = [];
-    let narrowed = 0;
     for (const seed of seeds) {
       const sc = scenario(Number(seed));
       const got = atMilliseconds(portVerdict(computeKeyTrust(portInput(sc))));
@@ -82,13 +80,9 @@ describe(`the trust walk against the engine (${recorded.engine})`, () => {
         return retiredAt !== null && retiredAt > st.createdUs && retiredAt.slice(0, 23) === st.createdUs.slice(0, 23);
       }).map((st) => st.id));
       want.findings = want.findings.filter((f) => !(f.startsWith('KEY_CLOSURE_INVALID|') && hidden.has(f.split('|')[1]!) && !got.findings.includes(f)));
-      if (JSON.stringify(got) !== JSON.stringify(want)) narrowed++;
-      const why = narrowerOnly(got, want);
-      if (why !== '') diverged.push(`seed ${seed}: ${why}: engine ${JSON.stringify(want)}, walk ${JSON.stringify(got)}`);
+      if (JSON.stringify(got) !== JSON.stringify(want)) diverged.push(`seed ${seed}: engine ${JSON.stringify(want)}, walk ${JSON.stringify(got)}`);
     }
     expect(diverged.slice(0, 5)).toEqual([]);
-    // The narrowing is rare; a jump means the walk moved, not the scenarios.
-    expect(narrowed).toBeLessThan(60);
   }, 120_000);
 
   it('takes the write order from createdAt and id at microseconds, whatever order the statements arrive in', () => {
@@ -96,8 +90,9 @@ describe(`the trust walk against the engine (${recorded.engine})`, () => {
     for (const seed of seeds) {
       const r = prng(Number(seed) ^ 0x5eed);
       const shuffled = portInputAtMicroseconds(scenario(Number(seed)), (xs) => xs.map((x) => [r(), x] as const).sort((a, b) => a[0] - b[0]).map(([, x]) => x));
-      const why = narrowerOnly(portVerdict(computeKeyTrust(shuffled)), recorded.verdicts[seed]!);
-      if (why !== '') diverged.push(`seed ${seed}: ${why}`);
+      const got = portVerdict(computeKeyTrust(shuffled));
+      const want = recorded.verdicts[seed]!;
+      if (JSON.stringify(got) !== JSON.stringify(want)) diverged.push(`seed ${seed}: engine ${JSON.stringify(want)}, walk ${JSON.stringify(got)}`);
     }
     expect(diverged.slice(0, 5)).toEqual([]);
   }, 120_000);
@@ -158,6 +153,40 @@ describe(`a walk over the key document the engine publishes (${recorded.engine})
     }
     expect(wrong.slice(0, 5)).toEqual([]);
     expect(agreed).toBeGreaterThanOrEqual(200);
+  }, 120_000);
+
+  it('reads distrustedFrom only into wording: with or without it, and whatever distrust entries the walk is given, the same keys, windows and findings', () => {
+    let reworded = 0;
+    let listed = 0;
+    const wrong: string[] = [];
+    const findingsOf = (t: KeyTrust) => t.findings.map((f) => [f.code, f.keyId, f.statementId]);
+    for (const seed of seeds) {
+      const sc = scenario(Number(seed));
+      const published = recorded.published[seed]!;
+      if (!published.some((p) => p.distrustedFrom !== undefined)) continue;
+      listed++;
+      const withFrom = documentOf(sc, published);
+      const without = documentOf(sc, published.map(({ distrustedFrom: _d, ...k }) => k));
+      const r = prng(Number(seed) ^ 0xd157);
+      // The engine's entries, none, and each moved to a random instant or none.
+      const shifted = sc.distrusted.map((d) => ({ spkiSha256: POOL[d.key]!.digest, cutoff: r() < 0.2 ? null : `2026-01-01T00:00:${String(Math.floor(r() * 60)).padStart(2, '0')}.${String(Math.floor(r() * 1e6)).padStart(6, '0')}Z` }));
+      for (const distrustedKeys of [sc.distrusted.map((d) => ({ spkiSha256: POOL[d.key]!.digest, cutoff: d.cutoff })), [], shifted]) {
+        const walk = (doc: VerificationKeysDocument) => computeKeyTrust({
+          ...keyStatementsFromVerificationKeys(doc),
+          trustAnchors: sc.anchors.map((k) => `sha256:${POOL[k]!.digest}`),
+          distrustedKeys,
+        });
+        const a = walk(withFrom);
+        const b = walk(without);
+        if (JSON.stringify([portVerdict(a), findingsOf(a)]) !== JSON.stringify([portVerdict(b), findingsOf(b)])) {
+          wrong.push(`seed ${seed}: with distrustedFrom ${JSON.stringify(findingsOf(a))}, without ${JSON.stringify(findingsOf(b))}`);
+        }
+        if (a.findings.some((f, i) => f.detail !== b.findings[i]!.detail && f.detail.includes('is listed as the Server\'s distrust cutoff'))) reworded++;
+      }
+    }
+    expect(wrong.slice(0, 5)).toEqual([]);
+    expect(listed).toBeGreaterThanOrEqual(100);
+    expect(reworded).toBeGreaterThanOrEqual(100);
   }, 120_000);
 
   it('needs the later admissions the engine publishes: with only each key\'s first, the walk dates windows differently', () => {

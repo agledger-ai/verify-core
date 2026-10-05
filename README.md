@@ -170,6 +170,22 @@ result invalid, at position 0:
 - `CHAIN_KEY_WINDOW_DRIFT`: a listed window or status that differs from the
   signed value (compared at millisecond precision).
 
+A key the Server's `VAULT_DISTRUSTED_KEYS` names is listed with
+`distrustedFrom`, the instant its entry gives (in an export's
+`signingKeyWindows` and on `/v1/verification-keys`), and where that instant is
+earlier than the retirement the key's closures sign, the listed `retiredAt` is
+that instant. A walk not given the same entry still fails on that window, but
+the finding names the entry the listing says the Server applied
+(`distrustedKeys sha256:<hex>@<distrustedFrom>`) rather than reading as a
+rewritten column, and says so when the entry it was given carries another
+instant; an entry at an earlier instant, which fails nothing on the window,
+is said in `keyTrust.notes`. `distrustedFrom` is the source's unsigned word
+and only changes that wording: it never ends, opens or widens a window and
+never clears a finding. Confirm the instant with the Server's operator before
+giving that `distrustedKeys` entry: off a dump an entry also voids every
+admission the key signed, so a key it admitted that nothing else reaches is
+no longer trusted and its window no longer graded.
+
 Statements are walked in the order the Server's database stored them,
 `createdAt` then the row `id`, never by an instant a statement signs. A dump
 carries that order (`created_at`), and so does every key document an API 2.0
@@ -269,7 +285,7 @@ statement, since its `createdAt` is the holder's word.
 
 On a dump, a `distrustedKeys` key that a key the walk trusts has retired is
 bounded by that retirement (its `DistrustSpan` in `trust.distrustSpans`; only a
-retirement by a key the walk trusts counts, which is narrower than the engine), and
+retirement by a key the walk trusts counts, as in the engine), and
 what it signed before then is accounted for rather than failed, as the engine's
 scan lists it: a key statement it signed that counts for nothing is listed in
 `trust.accounted` (and the report's `accounted`) instead of `findings`, and a

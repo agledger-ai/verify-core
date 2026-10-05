@@ -84,10 +84,12 @@ for (let seed = first; seed < first + count; seed++) {
     const retiredAt = anchored
       ? (signed?.retiredAt ? iso(signed.retiredAt) : null)
       : signed?.retiredAt ? iso(signed.retiredAt) : row.retired_at?.toISOString() ?? null;
+    const distrustedFrom = e.distrustSpans.get(digest)?.cutoff ?? null;
     doc.push({
       key: k.key,
       activatedAt: anchored && signed?.activatedAt ? iso(signed.activatedAt) : row.activated_at.toISOString(),
       retiredAt,
+      ...(distrustedFrom !== null ? { distrustedFrom } : {}),
       statements: (signed?.statements ?? []).map((c: { row: { id: string } }) => c.row.id),
     });
   }

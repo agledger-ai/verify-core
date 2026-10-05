@@ -207,6 +207,8 @@ export interface PublishedFuzzKey {
   /** As the document publishes it, at milliseconds. */
   activatedAt: string;
   retiredAt: string | null;
+  /** The distrust cutoff the engine publishes for a key VAULT_DISTRUSTED_KEYS names. */
+  distrustedFrom?: string;
   /** The ids of the statements filed under the key, in write order. */
   statements: string[];
 }
@@ -223,6 +225,7 @@ export function documentOf(sc: FuzzScenario, published: readonly PublishedFuzzKe
       status: k.retiredAt === null ? 'active' : 'retired',
       activatedAt: k.activatedAt,
       retiredAt: k.retiredAt,
+      ...(k.distrustedFrom !== undefined ? { distrustedFrom: k.distrustedFrom } : {}),
       statements: k.statements.map((id) => {
         const s = byId.get(id)!;
         return { id, kind: s.kind, createdAt: s.createdUs, cose: s.cose.map((b) => b.toString('base64')) };
@@ -284,37 +287,4 @@ export function portVerdict(trust: KeyTrust): Verdict {
     return e && { activatedAt: e.activatedAt, retiredAt: e.distrustCutoff ?? e.retiredAt };
   };
   return verdictOf({ trusted: trust.trusted, windowOf, findings: trust.findings, accounted: trust.accounted, spans: trust.distrustSpans });
-}
-
-/**
- * Where the walk may read a registry more narrowly than the engine, and only
- * so: what a distrust entry accounts for is bounded here only by a retirement
- * a key the walk trusts signed, and a later admission of a trusted key that the
- * key itself signed is never accounted for. Returns '' when `got` is `want`
- * or narrower only in those two ways, else what differs. Everything else
- * (trusted keys, windows, cutoffs, every engine finding) must be exact.
- */
-export function narrowerOnly(got: Verdict, want: Verdict): string {
-  if (JSON.stringify(got) === JSON.stringify(want)) return '';
-  if (JSON.stringify([got.trusted, got.windows]) !== JSON.stringify([want.trusted, want.windows])) return 'trusted keys or windows differ';
-  const narrowed = new Set<string>();
-  for (const k of new Set([...Object.keys(got.spans), ...Object.keys(want.spans)])) {
-    const [gc, gr] = got.spans[k] ?? [undefined, undefined];
-    const [wc, wr] = want.spans[k] ?? [undefined, undefined];
-    if (gc !== wc) return `cutoff of ${k} differs`;
-    if (gr === wr) continue;
-    if (gr !== null && (wr === null || wr === undefined || gr! < wr)) return `bound of ${k} is wider`;
-    narrowed.add(k);
-  }
-  const missing = want.findings.filter((f) => !got.findings.includes(f));
-  if (missing.length > 0) return `engine findings missing: ${missing.join(' ')}`;
-  const extraAccounted = got.accounted.filter((a) => !want.accounted.includes(a));
-  if (extraAccounted.length > 0) return `accounted beyond the engine: ${extraAccounted.join(' ')}`;
-  for (const f of got.findings.filter((x) => !want.findings.includes(x))) {
-    const [code, statementId, key] = f.split('|');
-    if (statementId === '' && code === 'KEY_CLOSURE_INVALID' && narrowed.has(key!)) continue;
-    if (statementId !== '' && want.accounted.includes(`${statementId}|${key}`)) continue;
-    return `unexplained finding ${f}`;
-  }
-  return '';
 }
