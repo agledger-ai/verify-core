@@ -98,6 +98,14 @@ export interface AuditExportEntryInput {
 export interface SigningKeyWindow {
   activatedAt: string;
   retiredAt: string | null;
+  /**
+   * The Server's `VAULT_DISTRUSTED_KEYS` instant for the key, present only on
+   * a key it names (RFC 3339 UTC, microsecond precision). Where it is earlier
+   * than the retirement the key's closures sign, `retiredAt` is this instant
+   * truncated to the millisecond. It changes only how the walk words a
+   * finding on the window: see `TrustKeyInput.distrustedFrom`.
+   */
+  distrustedFrom?: string;
 }
 
 /** A `/audit-export` document (only the fields the verifier reads). */
@@ -489,7 +497,14 @@ function trustKeysOf(exportData: RecordAuditExportInput, options: VerifyExportOp
     const window = meta.signingKeyWindows?.[keyId];
     out.push(
       window && typeof window === 'object'
-        ? { keyId, publicKey, activatedAt: window.activatedAt, retiredAt: window.retiredAt, status: window.retiredAt === null ? 'active' : 'retired' }
+        ? {
+          keyId,
+          publicKey,
+          activatedAt: window.activatedAt,
+          retiredAt: window.retiredAt,
+          status: window.retiredAt === null ? 'active' : 'retired',
+          ...(typeof window.distrustedFrom === 'string' ? { distrustedFrom: window.distrustedFrom } : {}),
+        }
         : { keyId, publicKey },
     );
   }

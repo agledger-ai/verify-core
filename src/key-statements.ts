@@ -160,6 +160,18 @@ export interface TrustKeyInput {
   activatedAt?: string | null;
   retiredAt?: string | null;
   /**
+   * The instant from which the Server's own `VAULT_DISTRUSTED_KEYS` entry
+   * makes what the key signs count for nothing, as a key document or an
+   * export's `signingKeyWindows` publishes it (RFC 3339 UTC, microsecond
+   * precision). It is the source's word and only ever changes how a finding
+   * on the listed window is worded: a listed `retiredAt` that equals it,
+   * where the walk signs a later retirement or none, names the distrust entry
+   * the walk was not given (or says the one it was given disagrees) instead
+   * of reading as a rewritten column. It never ends, opens or widens a window,
+   * and never clears a finding; only `distrustedKeys` does what an entry does.
+   */
+  distrustedFrom?: string | null;
+  /**
    * Where the key was read from. `dump`: a row of a dump's
    * `vault_signing_keys.ndjson` ({@link trustKeyFromDumpRow} sets it), a
    * registry fact the walk holds a distrusted key to: one no trusted key has
@@ -212,6 +224,9 @@ export interface KeyRegistryFinding {
  * nothing here, because the document's write time is the holder's word and is
  * never held against the key's cutoff, though the engine, holding it to the
  * time it was stored, counts it. It still dates windows and cuts edges back.
+ * Also a listed key whose `distrustedFrom` differs from the instant the
+ * caller's `distrustedKeys` entry gives it, where no finding on its window
+ * already says so.
  */
 export interface KeyTrustNote {
   keyId: string | null;
@@ -1011,13 +1026,12 @@ export function computeKeyTrust(input: ComputeKeyTrustInput): KeyTrust {
   const untrusted = [...cutoffs].filter(([, c]) => c === null).map(([d]) => d);
   for (const d of untrusted) trusted.delete(d);
   // What a distrust entry accounts for is bounded only by a retirement a key
-  // the walk trusts signed. The engine bounds it by any key reached without a
-  // distrusted key, a forced closure's cut-off keys included, so a key cut off
-  // from a leaked one could retire a distrusted key it also holds and have
-  // what that key forged read as accounted for. Only a signer the walk
-  // trusts and reaches without a distrusted key bounds it here: narrower than
-  // the engine, never wider; the cutoff a bound gives an undated entry is the
-  // engine's.
+  // the walk trusts signed. Bounded by any key reached without a distrusted
+  // key, a forced closure's cut-off keys included, a key cut off from a
+  // leaked one could retire a distrusted key it also holds and have what that
+  // key forged read as accounted for. Only a signer the walk trusts and
+  // reaches without a distrusted key bounds it, as in the engine; the cutoff
+  // a bound gives an undated entry comes from the reach alone.
   const clearOfDistrust = reach(anchors, edges.filter((e) => !distrust.has(e.from)));
   for (const [d, span] of distrustSpans) {
     let retiredBy: string | null = null;
@@ -1150,7 +1164,7 @@ export function computeKeyTrust(input: ComputeKeyTrustInput): KeyTrust {
         const retiredBy = distrustSpans.get(e)?.retiredAt ?? null;
         // A later admission of a trusted key that the key itself signed is
         // the record of its own half leaking, whoever co-signed it: never
-        // accounted for. Narrower than the engine, never wider.
+        // accounted for, as in the engine.
         const leakedSubject = s.payload.typ !== 'closure' && admissions.get(s.subject) !== s && s.check.subjectSigned && trusted.has(s.subject);
         if (leakedSubject) {
           finding(code, s, `${what} It is also a ${s.payload.typ} ${s.payload.subject.kid} signed after it was already admitted: ${s.payload.subject.kid}'s private half in other hands, which no distrust entry for ${by} accounts for. Move every Server process off ${s.payload.subject.kid}, retire it with force from the key they hold, and give distrustedKeys sha256:${s.subject}@<the instant it leaked> (VAULT_DISTRUSTED_KEYS on every Server process).`);
@@ -1257,10 +1271,36 @@ export function computeKeyTrust(input: ComputeKeyTrustInput): KeyTrust {
     .filter((c) => c.verdict === 'invalid' && c.payload !== null && c.payload.typ !== 'closure')
     .map((c) => c.payload!.subject.spkiSha256));
 
+  // A listed retirement the walk does not sign, read against the Server's own
+  // distrust instant (`distrustedFrom`): where the listing was cut at that
+  // instant and the walk signs a later retirement or none, the column is the
+  // Server's distrust entry, which the caller either was not given or gave
+  // another instant. Only the wording of a finding the check below makes
+  // anyway, never whether it makes one: `distrustedFrom` is the source's word.
+  const givenCutoff = new Map(distrustedKeys.map((d) => [d.spkiSha256, d.cutoff]));
+  const sameInstant = (a: string, b: string) => instantUs(a).us === instantUs(b).us;
+  const cutByServer = (key: TrustKeyInput, entry: KeyTrustEntry): string | null => {
+    const from = key.distrustedFrom;
+    if (typeof from !== 'string' || typeof key.retiredAt !== 'string') return null;
+    const fromMs = instantMs(from);
+    if (Number.isNaN(fromMs) || instantMs(key.retiredAt) !== fromMs) return null;
+    if (entry.retiredAt !== null && !(instantMs(entry.retiredAt) > fromMs)) return null;
+    const signed = entry.retiredAt === null ? 'no closure this walk could verify retires it' : `the retirement its closures sign is ${entry.retiredAt}`;
+    const lead = `retiredAt ${key.retiredAt} is listed as the Server's distrust cutoff for ${key.keyId} (distrustedFrom ${from}), and ${signed}`;
+    const caution = `The listing's instant is its unsigned word, so until the Server's operator confirms the entry, read the listed retirement as unexplained. Off a dump the entry also voids every admission ${key.keyId} signed, so a key it admitted that nothing else reaches is no longer trusted and its window no longer graded.`;
+    if (!givenCutoff.has(entry.spkiSha256)) {
+      return `${lead}: the listing says the Server distrusts the key from that instant (VAULT_DISTRUSTED_KEYS), and this walk was given no distrust entry for it. If the operator confirms it, give distrustedKeys sha256:${entry.spkiSha256}@${from}. ${caution}`;
+    }
+    const given = givenCutoff.get(entry.spkiSha256) ?? null;
+    if (given !== null && sameInstant(given, from)) return null;
+    return `${lead}: the distrust entry given for it (${given === null ? 'with no instant' : `from ${given}`}) and the one the listing says the Server applies (VAULT_DISTRUSTED_KEYS, from ${from}) disagree. Confirm the instant with the Server's operator. ${caution}`;
+  };
+
   // Findings on listed keys: their columns against the signed values, compared
   // at millisecond precision, the precision a dump or key document carries.
   for (const key of listedKeys) {
     const entry = entryFor(spkiSha256(key.publicKey));
+    const findingsBefore = findings.length;
     if (!entry.trusted || key.keyId !== entry.keyId) continue;
     if (entry.activatedAt !== null && typeof key.activatedAt === 'string' && instantMs(key.activatedAt) !== instantMs(entry.activatedAt)) {
       findings.push({ code: 'CHAIN_KEY_WINDOW_DRIFT', keyId: key.keyId, statementId: null, detail: `activatedAt ${key.activatedAt} differs from the signed ${entry.activatedAt}` });
@@ -1274,18 +1314,25 @@ export function computeKeyTrust(input: ComputeKeyTrustInput): KeyTrust {
       // one listed retired earlier than the cutoff is graded more loosely here
       // than where it was listed (a closure this walk could not verify).
       if (typeof key.retiredAt === 'string' && !(instantMs(key.retiredAt) >= instantMs(entry.distrustCutoff))) {
-        findings.push({ code: 'CHAIN_KEY_WINDOW_DRIFT', keyId: key.keyId, statementId: null, detail: `retiredAt ${key.retiredAt} is earlier than ${entry.distrustCutoff}, the distrust cutoff this walk ends the key at, and no closure it could verify signs it` });
+        findings.push({ code: 'CHAIN_KEY_WINDOW_DRIFT', keyId: key.keyId, statementId: null, detail: cutByServer(key, entry) ?? `retiredAt ${key.retiredAt} is earlier than ${entry.distrustCutoff}, the distrust cutoff this walk ends the key at, and no closure it could verify signs it` });
       }
-      continue;
-    }
-    if (key.status === 'retired') {
+    } else if (key.status === 'retired') {
       if (entry.retiredAt === null) {
-        findings.push({ code: 'KEY_CLOSURE_INVALID', keyId: key.keyId, statementId: null, detail: 'the key is listed as retired and no counting closure signs its retirement' });
+        findings.push({ code: 'KEY_CLOSURE_INVALID', keyId: key.keyId, statementId: null, detail: cutByServer(key, entry) ?? 'the key is listed as retired and no counting closure signs its retirement' });
       } else if (typeof key.retiredAt !== 'string' || instantMs(key.retiredAt) !== instantMs(entry.retiredAt)) {
-        findings.push({ code: 'CHAIN_KEY_WINDOW_DRIFT', keyId: key.keyId, statementId: null, detail: `retiredAt ${key.retiredAt ?? 'null'} differs from the signed ${entry.retiredAt}` });
+        findings.push({ code: 'CHAIN_KEY_WINDOW_DRIFT', keyId: key.keyId, statementId: null, detail: cutByServer(key, entry) ?? `retiredAt ${key.retiredAt ?? 'null'} differs from the signed ${entry.retiredAt}` });
       }
     } else if (key.status === 'active' && entry.retiredAt !== null) {
       findings.push({ code: 'CHAIN_KEY_WINDOW_DRIFT', keyId: key.keyId, statementId: null, detail: `the key is listed as active but a counting statement signs its retirement at ${entry.retiredAt}` });
+    }
+    // An entry given for the key at another instant than the Server's, which
+    // no finding above names: the walk ends the key earlier than the Server
+    // does (or the listing is cut elsewhere), so it fails what the Server
+    // still counts. Said, never graded.
+    const from = key.distrustedFrom;
+    const given = givenCutoff.get(entry.spkiSha256) ?? null;
+    if (findings.length === findingsBefore && typeof from === 'string' && given !== null && !Number.isNaN(instantMs(from)) && !sameInstant(given, from)) {
+      notes.push({ keyId: key.keyId, statementId: null, detail: `distrustedKeys gives ${key.keyId} the instant ${given}, and the listing says the Server distrusts it from ${from} (distrustedFrom, VAULT_DISTRUSTED_KEYS): the auditor's entry and the one the listing gives disagree, so what the key signed between the two instants is graded differently here than on the Server. Confirm the instant with the Server's operator.` });
     }
   }
 
@@ -1449,6 +1496,8 @@ export interface VerificationKeysDocument {
     status?: string | null;
     activatedAt?: string | null;
     retiredAt?: string | null;
+    /** The Server's `VAULT_DISTRUSTED_KEYS` instant for the key: see {@link TrustKeyInput.distrustedFrom}. */
+    distrustedFrom?: string | null;
     statements?: readonly PublishedKeyStatement[];
   }>;
   anchoredFrom?: string | null;
@@ -1474,6 +1523,7 @@ export function keyStatementsFromVerificationKeys(doc: VerificationKeysDocument)
     status: k.status === 'active' || k.status === 'retired' ? k.status : null,
     activatedAt: k.activatedAt ?? null,
     retiredAt: k.retiredAt ?? null,
+    ...(typeof k.distrustedFrom === 'string' ? { distrustedFrom: k.distrustedFrom } : {}),
   }));
   const statements = statementsFromMap(doc.data.map((k) => [k.keyId, k.statements] as [string, unknown]), 'verification-keys');
   return { keys, statements };
