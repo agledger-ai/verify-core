@@ -6,6 +6,8 @@ Statement payloads, walks the per-record hash chain, and verifies the
 signature over each `Sig_structure` under the algorithm the verification key
 commits to (Ed25519 or ES256), with no engine, no database, and no network.
 
+Reads exports and dumps from an AGLedger Server 2.0 or later. For a 1.x Server's, use `npm i @agledger/verify-core@1.5.0`, the last release that reads them.
+
 This is the single body of logic that underpins the SDK `/verify` subpath
 (`@agledger/sdk/verify`), the [`@agledger/cli`](https://github.com/agledger-ai/cli)
 `verify` command, the

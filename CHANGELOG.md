@@ -4,6 +4,12 @@ All notable changes to `@agledger/verify-core` will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Changed
+
+- The README says the package reads exports and dumps from an AGLedger Server 2.0 or later and names the last release that reads a 1.x Server's (verify-core#25).
+
 ## [2.0.0] - 2026-10-05
 
 This release targets AGLedger API 2.0 and reads nothing older. 1.6.0 was never published; its changes are part of this release.
