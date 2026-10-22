@@ -352,6 +352,8 @@ as its operator gives it (base64 SPKI DER or base64 of the raw 32 bytes), to
 also re-verify the peer's signature:
 
 ```ts
+import { verifyAuditExport } from '@agledger/verify-core';
+
 const result = verifyAuditExport(exportDocument, { federationKeys: { 'hub-b': 'MCowBQYDK2VwAyEA...' } });
 
 console.log(result.federationWire); // e.g. { present: 2, verified: 2 }
