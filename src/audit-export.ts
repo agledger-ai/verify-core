@@ -34,6 +34,7 @@ import type { FailureCode } from './failures.js';
 import { instantMs } from './instant.js';
 import { assertKnownOptions } from './options.js';
 import type { AgentPublicKeyJwk } from './primitives.js';
+import { buildFederationKeyRegistry, type FederationKeyEntry } from './federation-wire.js';
 import {
   applyKeyTrust,
   assertNotPinnedAndDistrusted,
@@ -225,6 +226,22 @@ export interface VerifyExportOptions {
    * Anything that is not an Ed25519 JWK throws `TypeError`.
    */
   agentKeys?: ReadonlyArray<AgentPublicKeyJwk>;
+  /**
+   * Federation keys of the Servers this one peers with, keyed by their hub id:
+   * `{ [hubId]: publicKey }` or `[{ hubId, publicKey }]`, each key as base64
+   * SPKI DER or base64 of the raw 32 bytes, as the peer registered it at
+   * handshake. Take them from the peer's operator, not from this Server.
+   *
+   * A receiving Server's FEDERATION_* entries seal the peer's message as the
+   * peer signed it (`payload.wire`). Every sealed message is held to its own
+   * body hash and to the entry that carries it; one from a hub listed here also
+   * has its signature re-verified under that key, which proves what the peer
+   * asserted from this export alone. A failure is
+   * CHAIN_FEDERATION_WIRE_INVALID. `result.federationWire` counts how many were
+   * present and how many were verified under a key. A key that is not an
+   * Ed25519 key throws `TypeError`.
+   */
+  federationKeys?: Readonly<Record<string, string>> | ReadonlyArray<FederationKeyEntry>;
 }
 
 export interface EntryVerificationResult {
@@ -289,6 +306,13 @@ export interface VerifyExportResult {
   /** Agent signatures present on the chain vs re-verified offline (see `agentKeys`). */
   agentSignatures: { present: number; verified: number };
   /**
+   * Federation messages sealed on the chain (`payload.wire`) vs re-verified
+   * under a `federationKeys` entry for their sender. Every present one held
+   * to its body hash and to its entry; `present > verified` means no key was
+   * supplied for those senders, never that they failed.
+   */
+  federationWire: { present: number; verified: number };
+  /**
    * `trusted`, `unanchored` or `failed` (see `Verdict`). Read this rather
    * than `valid` alone: a valid result with no `trustAnchors`, or none that
    * anchored a signature, is `unanchored`, which is not a trusted verdict.
@@ -349,6 +373,8 @@ export function verifyAuditExport(
   let keys = buildKeyRegistry(resolvedKeys);
   const agentKeys =
     options.agentKeys !== undefined ? buildAgentKeyRegistry(options.agentKeys) : undefined;
+  const federationKeys =
+    options.federationKeys !== undefined ? buildFederationKeyRegistry(options.federationKeys) : undefined;
   // An empty trustAnchors is the same as none: no walk, keyTrust 'no_anchor'.
   const trust =
     options.trustAnchors !== undefined && options.trustAnchors.length > 0
@@ -438,6 +464,7 @@ export function verifyAuditExport(
     requireKeyId: options.requireKeyId,
     requireSuppliedKeys: options.requireSuppliedKeys,
     agentKeys,
+    federationKeys,
     signingSince,
   });
   // Under a walk every key a signature verifies against is anchored, so the
@@ -474,12 +501,13 @@ export function verifyAuditExport(
     keyProvenance: chain.keyProvenance,
     unsignedProjectionFields: exportData.verificationGuide?.unsignedFields ?? [],
     agentSignatures: chain.agentSignatures,
+    federationWire: chain.federationWire,
     keyTrust,
     verdict: verdictOf({ valid, keyTrust }),
   };
 }
 
-const EXPORT_OPTIONS = ['publicKeys', 'requireKeyId', 'requireSuppliedKeys', 'trustAnchors', 'distrustedKeys', 'agentKeys'] as const satisfies ReadonlyArray<keyof VerifyExportOptions>;
+const EXPORT_OPTIONS = ['publicKeys', 'requireKeyId', 'requireSuppliedKeys', 'trustAnchors', 'distrustedKeys', 'agentKeys', 'federationKeys'] as const satisfies ReadonlyArray<keyof VerifyExportOptions>;
 
 function isKeysEnvelope(value: VerifyExportOptions['publicKeys']): value is { data: ReadonlyArray<SuppliedKeyEntry> } {
   return isRecord(value) && Array.isArray(value.data);
@@ -558,10 +586,12 @@ function earlyFailure(recordId: string, totalEntries: number, detail: string): V
       key_temporal: 'skipped_no_input',
       agent_signature: 'skipped_no_input',
       key_anchoring: 'skipped_no_input',
+      federation_wire: 'skipped_no_input',
     },
     keyProvenance: { supplied: 0, embedded: 0 },
     unsignedProjectionFields: [],
     agentSignatures: { present: 0, verified: 0 },
+    federationWire: { present: 0, verified: 0 },
     keyTrust: reportKeyTrust(new Map(), null, null),
     verdict: 'failed',
   };

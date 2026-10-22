@@ -80,6 +80,21 @@ export type {
   Verdict,
   VerificationKeysDocument,
 } from './key-statements.js';
+export {
+  FEDERATION_WIRE_SCHEME,
+  buildFederationKeyRegistry,
+  canonicalizeJson,
+  checkFederationWire,
+  extractFederationWire,
+  federationSignInput,
+  normalizeFederationKey,
+} from './federation-wire.js';
+export type {
+  FederationKeyEntry,
+  FederationKeyRegistry,
+  FederationWire,
+  FederationWireOutcome,
+} from './federation-wire.js';
 export { instantMs } from './instant.js';
 export { assertKnownOptions } from './options.js';
 

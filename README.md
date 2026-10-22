@@ -340,6 +340,31 @@ verify fails `CHAIN_AGENT_SIGNATURE_INVALID`. The check runs only where
 `on_behalf_of.validated` is `true`: on a caller-asserted identity the two fields
 may be passthrough from an older Server, and the export cannot tell which.
 
+### Messages sealed from a federated peer
+
+A receiving Server seals each peer message it accepts on the chain entry it
+writes for it (`payload.wire` on its `FEDERATION_*` entries): the body as the
+peer signed it, the peer's registered key, the hub ids, the body hash, the
+timestamp, the nonce and the signature. Every sealed message is held to its
+body hash and to the entry that carries it (`federation_wire` in
+`optionalChecks`, `applied` once one was seen). Pass the peer's federation key,
+as its operator gives it (base64 SPKI DER or base64 of the raw 32 bytes), to
+also re-verify the peer's signature:
+
+```ts
+const result = verifyAuditExport(exportDocument, { federationKeys: { 'hub-b': 'MCowBQYDK2VwAyEA...' } });
+
+console.log(result.federationWire); // e.g. { present: 2, verified: 2 }
+```
+
+A sealed signature that does not verify, a sealed key that is not the one
+supplied for that hub, a body that no longer hashes to what was signed, or an
+entry that asserts a state the sealed body does not carry fails
+`CHAIN_FEDERATION_WIRE_INVALID`. The pieces are exported for a caller that
+reads the sealed message itself: `extractFederationWire`,
+`checkFederationWire`, `federationSignInput`, `canonicalizeJson` (RFC 8785)
+and `normalizeFederationKey`.
+
 The Server's own chain verification also compares each sealed cert against its
 live cert record (`cert_missing`, `cert_actor_drift`, `cert_window_drift`,
 `cert_expired`). That record is not exported, so those checks have no offline
