@@ -4,7 +4,11 @@ All notable changes to `@agledger/verify-core` will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [2.1.0] - 2026-10-22
+
+### Added
+
+- **The sealed federation message on a receiver's chain is verified (`federationKeys`, verify-core#28).** From AGLedger Server 2.0.0 main, a receiving Server's `FEDERATION_STATE_SYNC`, `FEDERATION_SIGNAL_RECEIVED` and `FEDERATION_CO_SIGN_RESPONDED` entries carry `payload.wire`: the peer's message as the peer signed it, with the peer's registered key, the hub ids, the body hash, the timestamp, the nonce, the signature and the body. `verifyChain` and `verifyAuditExport` now hold every sealed message to its body hash (SHA-256 over the RFC 8785 form of the body) and to the entry that carries it (the peer it names, the record, and the state, type, recommendation or dispute it asserts), and, given `federationKeys` (`{ [hubId]: key }` or `[{ hubId, publicKey }]`, the key as base64 SPKI DER or base64 of the raw 32 bytes), re-verify the signature over the sign-input under that key and refuse a sealed key that is not the one supplied. A failure is the new `CHAIN_FEDERATION_WIRE_INVALID`; `federation_wire` joins `optionalChecks` and `federationWire: { present, verified }` joins every result. A key that is not an Ed25519 key throws `TypeError` at the boundary. Exported for direct use: `extractFederationWire`, `checkFederationWire`, `federationSignInput`, `buildFederationKeyRegistry`, `normalizeFederationKey` and `canonicalizeJson`.
 
 ### Changed
 
@@ -46,7 +50,7 @@ This release targets AGLedger API 2.0 and reads nothing older. 1.6.0 was never p
 ### Fixed
 
 - **A copied key-statement row is a no-op.** A dump row repeating an earlier row's signed payload counts once, at its first write, as the engine reads it, so a row copied in the database under a new id and time (anything with the runtime role can write one to the append-only table) no longer reads as a second admission or as a statement stored after a closure, and no longer fails every dump. On a key document a copy stays a second statement: its `createdAt` is the holder's word, and a copy dated earlier would otherwise push the published statement and its finding aside.
-- Two readings match agledger-api from `48670192` on, where an earlier engine's would account for what should fail: only a retirement signed by a key the walk trusts (and reaches without a distrusted key) bounds what a distrust entry accounts for, so a key a forced closure cut off cannot retire a distrusted key it also holds and have that key's forgeries listed as accounted for; and a later admission of a trusted key that the key itself signed is always a finding, never accounted for, whichever distrusted key co-signed it.
+- Two readings match the current engine, where an earlier engine's would account for what should fail: only a retirement signed by a key the walk trusts (and reaches without a distrusted key) bounds what a distrust entry accounts for, so a key a forced closure cut off cannot retire a distrusted key it also holds and have that key's forgeries listed as accounted for; and a later admission of a trusted key that the key itself signed is always a finding, never accounted for, whichever distrusted key co-signed it.
 - The admission of a trusted key signed by a distrusted key from its cutoff on (a fresh key staged with the leaked key as its predecessor, and pinned) is no finding when it is that key's first admission. A later one stays a finding.
 - No remedy names a distrusted key as a pin. The remedies for a closure that still counts suggest a dated `distrustedKeys` entry (`sha256:<key>@<instant>`), the instant defaulting to the signer's earliest counting retirement capped at its write time, and say a pin on the key may stay beside it.
 - **An unsigned entry where the install could not have written one is a break.** An entry with no `signingKeyId` used to pass as a `skipped` signature wherever it sat, so a writer holding no key could append an unsigned entry to a signed chain, or a signed row could have its key id nulled, and the chain still verified. It now fails the new `CHAIN_ENTRY_UNSIGNED` when an earlier entry in the same chain names a key, or when its `createdAt` is at or after the earliest `activatedAt` across the key set, retired keys included. That is the rule the engine applies as `signature_missing`. On the export path the key set is every key the verifier holds plus every window in `exportMetadata.signingKeyWindows`, with a caller-supplied window taking precedence for its key as it already does for the key-window check. With `trustAnchors`, every activation an anchored key's statements sign counts as well, and the earliest of all of them stands: the windows are the export's unsigned word, so an export stripped of them, or with them moved later, is still held to the signed activation. Unsigned entries written before the install registered its first key, which is how dev and test installs run, stay a `skipped` signature and reduced coverage, as before. With no activation time anywhere (an older export, or caller keys without `activatedAt` and no export windows), only the signed-before half applies. An unsigned entry with no readable `createdAt` once signing began fails `CHAIN_MALFORMED_ENTRY` (see below). Every structural check still runs first, so a tampered unsigned entry reports its own code. Under `requireKeyId` / `requireSuppliedKeys`, such an entry now reports `CHAIN_ENTRY_UNSIGNED` rather than `CHAIN_KEY_POLICY_VIOLATION`, since it is a finding about the chain whatever the policy; an unsigned entry from before the first key still fails the policy.
@@ -62,15 +66,15 @@ This release targets AGLedger API 2.0 and reads nothing older. 1.6.0 was never p
 
 ### Changed
 
-- The conformance corpus is regenerated from agledger-api 2.0.0 (`5444a54f`), and this repo now carries its dump slice as well as the export slice: the walk and the org-read tree are checked against the statements, leaves and signed tree heads the engine wrote. Every export vector passes as its manifest expects, as does every dump vector that pins `trustAnchors`.
+- The conformance corpus is regenerated from API 2.0.0, and this repo now carries its dump slice as well as the export slice: the walk and the org-read tree are checked against the statements, leaves and signed tree heads the engine wrote. Every export vector passes as its manifest expects, as does every dump vector that pins `trustAnchors`.
 - The runtime known-answer, algorithm and key-material checks apply to key statements as they do to entries, with one difference the engine also makes: a statement signature carries exactly one COSE `alg` per algorithm (-8 for Ed25519, -7 for ES256).
-- The engine differential is re-recorded at agledger-api `007ffe32` (1500 registries, with the `distrustedFrom` each key document lists) and holds this package's walk to the engine's exactly, on verdicts, on shuffled statement order and on every key document, with no tolerance for a narrower reading (the millisecond comparison still sets aside a closure dated after its write time within the same millisecond, which a dump cannot show).
+- The engine differential is re-recorded against the current engine (1500 registries, with the `distrustedFrom` each key document lists) and holds this package's walk to the engine's exactly, on verdicts, on shuffled statement order and on every key document, with no tolerance for a narrower reading (the millisecond comparison still sets aside a closure dated after its write time within the same millisecond, which a dump cannot show).
 
 ## [1.5.0] - 2026-09-21
 
 ### Fixed
 
-- **Conformance corpus regenerated from the tagged 1.8.0 engine** (`apiGitSha 3948cc68`, the `v1.8.0` commit), replacing a corpus generated at API 1.3.4. The export slice goes from 23 to 32 vectors and the dump slice from 12 to 18, and the additions cover this release's own work: `export/actor-attribution-mismatch.json` and `dump/chain-actor-attribution-mismatch` both expect `CHAIN_ACTOR_ATTRIBUTION_MISMATCH`, and `export/agent-signature-invalid.json` expects `CHAIN_AGENT_SIGNATURE_INVALID`. The runner now maps the manifest's `agentKeysFile` to the verifier's agent-key input; without it that vector ran with no agent keys, reported `skipped_no_input`, passed, and failed the suite on a check that never executed.
+- **Conformance corpus regenerated from the tagged 1.8.0 engine** (the `v1.8.0` release), replacing a corpus generated at API 1.3.4. The export slice goes from 23 to 32 vectors and the dump slice from 12 to 18, and the additions cover this release's own work: `export/actor-attribution-mismatch.json` and `dump/chain-actor-attribution-mismatch` both expect `CHAIN_ACTOR_ATTRIBUTION_MISMATCH`, and `export/agent-signature-invalid.json` expects `CHAIN_AGENT_SIGNATURE_INVALID`. The runner now maps the manifest's `agentKeysFile` to the verifier's agent-key input; without it that vector ran with no agent keys, reported `skipped_no_input`, passed, and failed the suite on a check that never executed.
 
 - **Actor attribution is verified, not displayed on trust.** An audit export's own verification guide names `actorDisplayName`, `actorOwnerType` and `humanReadableLabel` as unsigned display projections and tells the auditor that the attribution to rely on is the `actorId`/`actorOwnerId` UUID. Those two, and `actorRole`, are signature-covered in the COSE protected header (CWT_Claims label 15, private label -65539), and nothing compared them against it: an export or dump row could be re-attributed to another actor, changing nothing else, and still verify with out-of-band keys. They are now cross-checked per entry, and a divergence fails the new `CHAIN_ACTOR_ATTRIBUTION_MISMATCH`. An artifact that carries no actor columns, or an envelope from an engine that predates the claim, is reported `optionalChecks.actor_attribution: skipped_no_input` rather than passed. `extractActorClaim` is exported for callers that want the signed value themselves.
 
@@ -114,7 +118,7 @@ and the two releases verify the same inputs to the same verdicts.
 
 ### Fixed
 
-- **A runtime that cannot compute an algorithm no longer reads as tamper.** With the OpenSSL FIPS provider active there is no EdDSA, so Node's `verify()` throws `ERR_OSSL_EVP_OPERATION_NOT_SUPPORTED_FOR_THIS_KEYTYPE` for a perfectly good Ed25519 key. That throw was caught and returned as `false`, which is indistinguishable from a signature that genuinely did not verify, so a FIPS-locked auditor verifying an intact chain got `0/N verified` and `CHAIN_SIGNATURE_INVALID` on every entry: the most alarming thing this package can say, about a chain that is fine (agents#113).
+- **A runtime that cannot compute an algorithm no longer reads as tamper.** With the OpenSSL FIPS provider active there is no EdDSA, so Node's `verify()` throws `ERR_OSSL_EVP_OPERATION_NOT_SUPPORTED_FOR_THIS_KEYTYPE` for a perfectly good Ed25519 key. That throw was caught and returned as `false`, which is indistinguishable from a signature that genuinely did not verify, so a FIPS-locked auditor verifying an intact chain got `0/N verified` and `CHAIN_SIGNATURE_INVALID` on every entry: the most alarming thing this package can say, about a chain that is fine.
 
   Verification now proves runtime capability before dispatching, by checking a fixed known-answer signature for the algorithm. When the runtime refuses, the outcome is `CHAIN_UNSUPPORTED_ALGORITHM` with `signature: 'unsupported'`, whose detail names the FIPS provider as the cause and says to re-run on an unrestricted host. Still fail-closed: an uncheckable chain is not a verified chain, and `valid` stays `false`. The known-answer vectors are fixed, self-contained bytes, so nothing in the audited export can influence whether a signature failure is reported as "not checked".
 
@@ -142,20 +146,20 @@ and the two releases verify the same inputs to the same verdicts.
 
 ### Packaging
 
-- **Source maps are no longer published.** `dist/**/*.map` shipped with `sources` pointing at `../src/*.ts` and no `sourcesContent`, and `src/` is not in the tarball, so they resolved to nothing. Ten dead files removed. The build no longer emits them at all, so no shipped `.js` or `.d.ts` carries a `sourceMappingURL` comment pointing at a map the tarball does not contain (agents#114).
+- **Source maps are no longer published.** `dist/**/*.map` shipped with `sources` pointing at `../src/*.ts` and no `sourcesContent`, and `src/` is not in the tarball, so they resolved to nothing. Ten dead files removed. The build no longer emits them at all, so no shipped `.js` or `.d.ts` carries a `sourceMappingURL` comment pointing at a map the tarball does not contain.
 - **`bugs` added to package.json**, so npm links issues at the right repo.
 
 ## [1.3.0] - 2026-08-07
 
 ### Added (published API: widened union)
 
-- **`CHAIN_KEY_NOT_YET_ACTIVE`**, for an entry written BEFORE its signing key's activation. Both directions of the temporal key-window check previously reported `CHAIN_KEY_EXPIRED`, so a consumer branching on the code was told "expired" about a key that had not started yet and would go looking at rotation or retention when the real condition is a backdated entry or clock skew. Those are different investigations, and the activation direction is the security-relevant one. `CHAIN_KEY_EXPIRED` now means only the retirement side, and both explanations were rewritten to say which direction they describe (agents#112).
+- **`CHAIN_KEY_NOT_YET_ACTIVE`**, for an entry written BEFORE its signing key's activation. Both directions of the temporal key-window check previously reported `CHAIN_KEY_EXPIRED`, so a consumer branching on the code was told "expired" about a key that had not started yet and would go looking at rotation or retention when the real condition is a backdated entry or clock skew. Those are different investigations, and the activation direction is the security-relevant one. `CHAIN_KEY_EXPIRED` now means only the retirement side, and both explanations were rewritten to say which direction they describe.
 
   `FailureCode` gains a member, so an exhaustive switch over it needs the new case. Verification verdicts are unchanged: an entry that failed before still fails, only the code on the activation side differs.
 
 ## [1.2.0] - 2026-08-05
 
-Signing-agility wave 2: this build now verifies ES256 chains. Engines older than api R2 are unaffected; Ed25519 chains verify byte-identically to 1.1.1.
+Signing-agility wave 2: this build now verifies ES256 chains. Engines that predate ES256 signing are unaffected; Ed25519 chains verify byte-identically to 1.1.1.
 
 ### Added
 
@@ -164,7 +168,7 @@ Signing-agility wave 2: this build now verifies ES256 chains. Engines older than
 
 ### Changed
 
-- **Conformance corpus regenerated from engine 1.3.4 @ `ed3369ab`** (the api R2 signing-agility build) and re-pinned via `CORPUS-LOCK.json`. The export slice gains the ES256 wave: `valid-es256` (real ES256 engine output, must pass), `es256-signature-invalid`, and `es256-header-alg-mismatch` (a valid ES256 signature under an EdDSA header must read as `CHAIN_ALG_MISMATCH`, tamper class, not an upgrade notice).
+- **Conformance corpus regenerated from API 1.3.4** and re-pinned via `CORPUS-LOCK.json`. The export slice gains the ES256 wave: `valid-es256` (real ES256 engine output, must pass), `es256-signature-invalid`, and `es256-header-alg-mismatch` (a valid ES256 signature under an EdDSA header must read as `CHAIN_ALG_MISMATCH`, tamper class, not an upgrade notice).
 
 ## [1.1.1] - 2026-08-05
 
@@ -179,7 +183,7 @@ The verifier forward-compatibility floor: this release prepares every verificati
 ### Changed (published API: widened unions, stricter classification)
 
 - **`CoseVerifyOutcome` gains `'alg-mismatch'` and `'unsupported-key-algorithm'`.** Algorithm dispatch now binds to the TRUSTED verification key (the SPKI AlgorithmIdentifier), never to the protected header: at dispatch time the signature has not been checked, so the header `alg` is attacker-controlled input. The header value is asserted equal to the key's expectation. A mismatch (including a missing `alg`, an unassigned value, or any MAC label) is `'alg-mismatch'`, a tamper-class result: one flipped header byte reads as forgery, never as an upgrade notice. A key whose algorithm this build cannot compute is `'unsupported-key-algorithm'`, which callers must fail closed on.
-- **`verifyEd25519Bytes` refuses non-Ed25519 keys.** Node's `verify(null, ...)` silently computes ECDSA/SHA-256 for EC keys, so a P-256 key could "verify" a signature no conformant EdDSA verifier accepts (the engine-side signing guard is api#1089). It now returns `false` for any non-Ed25519 key.
+- **`verifyEd25519Bytes` refuses non-Ed25519 keys.** Node's `verify(null, ...)` silently computes ECDSA/SHA-256 for EC keys, so a P-256 key could "verify" a signature no conformant EdDSA verifier accepts (the engine applies the matching guard when signing). It now returns `false` for any non-Ed25519 key.
 - **The all-zero unsigned sentinel is evaluated after algorithm resolution, at the key's expected signature length.** A zero fill of a different algorithm's length is no longer misread as unsigned or as forged.
 - **`decodeCoseSign1` rejects untagged COSE_Sign1** (leading byte must be `0xd2`, CBOR tag 18), matching the engine's decoder. Producer and offline verifier previously disagreed on what a COSE_Sign1 is.
 - **`FailureCode` gains `CHAIN_ALG_MISMATCH`, `CHAIN_UNSUPPORTED_ALGORITHM`, and `CHAIN_SIGNING_KEY_DRIFT`**; `SignatureOutcome['state']` gains `'unsupported'`. `CHAIN_UNSUPPORTED_ALGORITHM` is always `valid: false` and breaks the chain.
@@ -199,7 +203,7 @@ Dependency and test only. No verification, signing, or wire-format change; verif
 
 ### Changed
 
-- **`cborg` moved from 5.1.1 to 6.1.1**, still an exact pin. 5.1.1 predated the 5.1.4 fix that emits shortest-form floats under `rfc8949EncodeOptions` (RFC 8949 4.2.1), so the old pin was frozen on non-conformant float encoding rather than on conformant output. It also left this package on a different encoder than the engine that produces the envelopes it verifies (`agledger-api` runs `cborg` 5.1.8). Neither difference could change this package's output, for the reason the new test below asserts.
+- **`cborg` moved from 5.1.1 to 6.1.1**, still an exact pin. 5.1.1 predated the 5.1.4 fix that emits shortest-form floats under `rfc8949EncodeOptions` (RFC 8949 4.2.1), so the old pin was frozen on non-conformant float encoding rather than on conformant output. It also left this package on a different encoder than the engine that produces the envelopes it verifies (the engine runs `cborg` 5.1.8). Neither difference could change this package's output, for the reason the new test below asserts.
 - Dependabot no longer ignores `cborg` updates. The exact pin stays (a given release is byte-reproducible); the new invariance test is the gate on taking a new one.
 
 ### Added
@@ -219,13 +223,13 @@ Tooling only. No verification, signing, or wire-format change; the shipped dist 
 
 ### Changed
 
-- Docs only: removed em-dashes from the README prose and the package.json description (cross-repo #98 writing-style sweep). Rewrote each sentence rather than swapping the glyph. No verification, signing, or wire-format change.
+- Docs only: removed em-dashes from the README prose and the package.json description (writing-style sweep). Rewrote each sentence rather than swapping the glyph. No verification, signing, or wire-format change.
 
 ## [1.0.1] - 2026-06-22
 
 ### Added
 
-- **`VerifyExportResult.unsignedProjectionFields`** (cross-repo #96 / api#769) — surfaces the export's self-described `verificationGuide.unsignedFields`: per-entry fields that are UNSIGNED display projections (e.g. `actorDisplayName`, `actorOwnerType`, `humanReadableLabel`) resolved at export time and NOT covered by the COSE_Sign1 signature. Empty when the export carries no such guidance. Signed attribution remains the `actorOwnerId`/`actorId` UUID. `RecordAuditExportInput` gains the optional `verificationGuide` field it's read from. Purely additive; no change to chain verification, signing, or the wire format.
+- **`VerifyExportResult.unsignedProjectionFields`** — surfaces the export's self-described `verificationGuide.unsignedFields`: per-entry fields that are UNSIGNED display projections (e.g. `actorDisplayName`, `actorOwnerType`, `humanReadableLabel`) resolved at export time and NOT covered by the COSE_Sign1 signature. Empty when the export carries no such guidance. Signed attribution remains the `actorOwnerId`/`actorId` UUID. `RecordAuditExportInput` gains the optional `verificationGuide` field it's read from. Purely additive; no change to chain verification, signing, or the wire format.
 
 ## [1.0.0] - 2026-06-20
 
@@ -282,7 +286,7 @@ No functional change to the verifier. This is the first release published from C
 
 ## [0.1.3] - 2026-05-29
 
-Closes [agledger-agents#84 (F-731)](https://github.com/agledger-ai/agledger-agents/issues/84) and threads the F-732 signature-state change.
+Adds binding-integrity on the export path and the `not-checked` signature state.
 
 ### Added
 
@@ -294,12 +298,12 @@ Closes [agledger-agents#84 (F-731)](https://github.com/agledger-ai/agledger-agen
 
 ## [0.1.2] - 2026-05-28
 
-Closes [agledger-agents#77 (F-698)](https://github.com/agledger-ai/agledger-agents/issues/77) and tightens the audit-independence claim on the temporal axis.
+Tightens the audit-independence claim on the temporal axis.
 
 ### Changed
 
 - `verifyAuditExport({ publicKeys })` now accepts the natural `OutOfBandKeyEntry[]` shape returned by `client.verificationKeys.list().data` in addition to the compact `Record<keyId, base64SpkiDer>` map. Previously, passing the array form silently fell through to the export's embedded keys (`keyProvenance.outOfBand === 0` with `valid: true`) — a false independence claim that defeated the whole point of supplying OOB keys. Now: arrays are normalized at the boundary; wrong shapes (string, missing fields, non-object entries) throw `TypeError`. Fail-closed by design.
-- `signingKeyWindows` from the export's own (untrusted) `exportMetadata` no longer overrides activation/retirement windows supplied on out-of-band entries. A compromised export could otherwise hide a retirement by setting `retiredAt: null` and silently pass entries signed by a key the auditor knows to be retired — F-698 on the temporal axis. When the OOB caller carries `activatedAt`/`retiredAt` on their entry, the export's window for that key is skipped entirely; when the OOB caller did not carry a window, the export's window still feeds `key_temporal` (most auditors trust the engine's published key-rotation log even when they bring their own key catalogue).
+- `signingKeyWindows` from the export's own (untrusted) `exportMetadata` no longer overrides activation/retirement windows supplied on out-of-band entries. A compromised export could otherwise hide a retirement by setting `retiredAt: null` and silently pass entries signed by a key the auditor knows to be retired — the same independence gap on the temporal axis. When the OOB caller carries `activatedAt`/`retiredAt` on their entry, the export's window for that key is skipped entirely; when the OOB caller did not carry a window, the export's window still feeds `key_temporal` (most auditors trust the engine's published key-rotation log even when they bring their own key catalogue).
 
 ### Added
 
@@ -311,7 +315,7 @@ Wire-parity follow-on to the verifier consolidation: the export path now exercis
 
 ### Changed
 
-- `verifyAuditExport` now reads the new export wire fields (engine ≥ v0.26.x, agledger-api commit a7eec8e4): per-entry `createdAt`, `actorOidcIss`, `actorOidcSub`, `actorOidcSynthesized`, and `exportMetadata.signingKeyWindows`. When present, `optionalChecks.oidc_actor` and `optionalChecks.key_temporal` now flip from `skipped_no_input` to `applied` on the export path, exercising `CHAIN_OIDC_ACTOR_MISMATCH` and `CHAIN_KEY_EXPIRED` against the live wire.
+- `verifyAuditExport` now reads the new export wire fields (engine ≥ v0.26.x): per-entry `createdAt`, `actorOidcIss`, `actorOidcSub`, `actorOidcSynthesized`, and `exportMetadata.signingKeyWindows`. When present, `optionalChecks.oidc_actor` and `optionalChecks.key_temporal` now flip from `skipped_no_input` to `applied` on the export path, exercising `CHAIN_OIDC_ACTOR_MISMATCH` and `CHAIN_KEY_EXPIRED` against the live wire.
 - `optionalChecks.payload_binding` stays `skipped_no_input` on the export path by design — the export deliberately re-projects the row payload from the signed bytes (anti-DBA-injection), so binding-integrity remains dump-only (`@agledger/verify`).
 - Older exports without the new fields still verify cleanly; the optional checks stay `skipped_no_input` as before.
 

@@ -108,6 +108,7 @@ export type FailureCode =
   | 'CHAIN_SIGNING_KEY_DRIFT'
   | 'CHAIN_ACTOR_ATTRIBUTION_MISMATCH'
   | 'CHAIN_AGENT_SIGNATURE_INVALID'
+  | 'CHAIN_FEDERATION_WIRE_INVALID'
   | 'CHAIN_ENTRY_UNSIGNED'
   | 'CHAIN_SIGNING_KEY_UNANCHORED'
   | 'CHAIN_KEY_WINDOW_DRIFT'
@@ -183,6 +184,8 @@ const SUGGESTIONS: Record<FailureCode, string> = {
     'The entry\'s actorId / actorOwnerId columns name a different actor than the signature-covered actor claim in the COSE protected header (CWT_Claims label 15, private label -65539). The columns are the projection a report displays and they were rewritten after signing, re-attributing the action to another actor. Trust the signed claim; treat the row as tampered and re-obtain the export from the operator.',
   CHAIN_AGENT_SIGNATURE_INVALID:
     'The agent signature sealed in predicate.on_behalf_of.agent_signature does not verify under the supplied key whose RFC 7638 thumbprint the entry itself names, or is sealed in a shape nothing can verify. The engine checks this signature at intake and the envelope signature says the engine wrote it, so this is not a caller mistake: treat the agent attribution of this entry as unproven and escalate to the operator.',
+  CHAIN_FEDERATION_WIRE_INVALID:
+    'The federation message sealed in payload.wire does not hold: its body no longer hashes to the bodyHash the sender signed, the entry asserts a state, type, recommendation or dispute the sealed body does not carry, or (under the sender\'s federation key you supplied) the signature does not verify or the sealed senderPublicKey is not that key. The receiving Server verified the message at intake and signed this entry, so this is not a caller mistake: treat what the entry says the peer asserted as unproven and escalate to both operators.',
   CHAIN_ENTRY_UNSIGNED:
     'The entry carries no signing key id where the install could not have written an unsigned entry: after a signed entry in the same chain, or at or after the earliest activation time in the signing key set (retired keys included). From that instant every writer holds a registered key, so this is what a writer without one leaves on the chain, or a signed row whose key id was nulled. Treat the entry as forged and escalate to the operator. Unsigned entries from before the first key activation stay reduced signature coverage, not a break.',
   CHAIN_SIGNING_KEY_UNANCHORED:

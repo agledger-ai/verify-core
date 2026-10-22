@@ -55,6 +55,7 @@ import {
   verifyCoseSign1,
   type AgentPublicKeyJwk,
 } from './primitives.js';
+import { checkFederationWire, extractFederationWire, type FederationKeyRegistry } from './federation-wire.js';
 import type { FailureCode } from './failures.js';
 import { instantMs, rfc3339Ms } from './instant.js';
 import { assertKnownOptions } from './options.js';
@@ -232,7 +233,8 @@ export type OptionalCheck =
   | 'actor_attribution'
   | 'key_temporal'
   | 'agent_signature'
-  | 'key_anchoring';
+  | 'key_anchoring'
+  | 'federation_wire';
 /**
  * `applied`: the check ran. `skipped_no_input`: the input it needs is absent.
  * `not_checked`: the input was given but no entry reached the check, because
@@ -355,6 +357,16 @@ export interface ChainResult {
    * they failed.
    */
   agentSignatures: { present: number; verified: number };
+  /**
+   * Federation messages sealed on this chain (`payload.wire` on a receiving
+   * Server's FEDERATION_* entries). `present` counts entries that passed every
+   * other check and carry one, each held to its own body hash and to the entry
+   * that carries it; `verified` counts those whose sealed signature was also
+   * checked under a `federationKeys` entry for the sending hub and found good.
+   * `present > verified` on a valid chain means no key was supplied for those
+   * senders, never that they failed.
+   */
+  federationWire: { present: number; verified: number };
 }
 
 export interface VerifyChainOptions {
@@ -375,6 +387,14 @@ export interface VerifyChainOptions {
    * offline; a failure is CHAIN_AGENT_SIGNATURE_INVALID.
    */
   agentKeys?: AgentKeyRegistry;
+  /**
+   * Sending hubs' federation keys (see `buildFederationKeyRegistry`). An entry
+   * that seals a peer's message (`payload.wire`) from a hub listed here has
+   * that message's signature re-verified under the key; a failure is
+   * CHAIN_FEDERATION_WIRE_INVALID. The hash and the entry's agreement with
+   * the sealed body are checked on every sealed message, with or without a key.
+   */
+  federationKeys?: FederationKeyRegistry;
   /**
    * The instant this install began signing: the earliest `activatedAt` across
    * its whole signing key set, retired keys included. An entry with a null
@@ -469,7 +489,7 @@ export function verifyChain(
   keys: KeyRegistry,
   options: VerifyChainOptions = {},
 ): ChainResult {
-  assertKnownOptions('verifyChain', options, ['requireKeyId', 'requireSuppliedKeys', 'agentKeys', 'signingSince'] satisfies ReadonlyArray<keyof VerifyChainOptions>);
+  assertKnownOptions('verifyChain', options, ['requireKeyId', 'requireSuppliedKeys', 'agentKeys', 'federationKeys', 'signingSince'] satisfies ReadonlyArray<keyof VerifyChainOptions>);
   const scopeId = entries[0]?.scopeId ?? '(empty)';
   const sorted = entries
     .map((entry, at) => ({ entry, at, key: positionKey(entry.chainPosition) }))
@@ -485,9 +505,11 @@ export function verifyChain(
     key_temporal: 'skipped_no_input',
     agent_signature: 'skipped_no_input',
     key_anchoring: 'skipped_no_input',
+    federation_wire: 'skipped_no_input',
   };
   const keyProvenance = { supplied: 0, embedded: 0 };
   const agentSignatures = { present: 0, verified: 0 };
+  const federationWire = { present: 0, verified: 0 };
   let verifiedEntries = 0;
   let brokenAt: ChainResult['brokenAt'];
   const accounted: AccountedEntry[] = [];
@@ -505,6 +527,7 @@ export function verifyChain(
       optionalChecks,
       keyProvenance,
       agentSignatures,
+      federationWire,
     };
   }
 
@@ -537,6 +560,9 @@ export function verifyChain(
     if (entry.signingKeyId !== null) mustSign.signedBefore = true;
     if (result.valid && result.accounted === undefined) {
       result = checkAgentSignature(entry, result, options.agentKeys, optionalChecks, agentSignatures);
+    }
+    if (result.valid && result.accounted === undefined && entry.binding !== undefined) {
+      result = checkSealedFederationWire(entry, result, options.federationKeys, optionalChecks, federationWire);
     }
     entryResults.push(result);
 
@@ -592,7 +618,50 @@ export function verifyChain(
     optionalChecks,
     keyProvenance,
     agentSignatures,
+    federationWire,
   };
+}
+
+/**
+ * The sealed federation message on an entry that already passed every other
+ * check (so `binding.payload` is what the receiver signed): its body hash,
+ * its agreement with the entry, and, under a supplied key for the sending
+ * hub, its signature. See `federation-wire.ts`.
+ */
+function checkSealedFederationWire(
+  entry: NormalizedEntry,
+  result: ChainEntryResult,
+  federationKeys: FederationKeyRegistry | undefined,
+  optionalChecks: Record<OptionalCheck, CheckApplicability>,
+  counts: { present: number; verified: number },
+): ChainEntryResult {
+  if (entry.binding === undefined) return result;
+  const wire = extractFederationWire(entry.binding.payload);
+  if (wire === null) return result;
+  optionalChecks.federation_wire = 'applied';
+  if (wire === 'malformed') {
+    return fail(
+      entry.scopeId,
+      result.position,
+      'CHAIN_FEDERATION_WIRE_INVALID',
+      'payload.wire is present but is not a sealed federation message (an object with scheme, senderHubId, senderPublicKey, recipientHubId, method, path, bodyHash, timestamp, nonce, signature and an object body).',
+      result.signature,
+    );
+  }
+  counts.present++;
+  const outcome = checkFederationWire(entry.binding.entryType, entry.binding.recordId, entry.binding.payload, wire, federationKeys);
+  if (outcome.outcome === 'ok') {
+    if (outcome.signatureChecked) counts.verified++;
+    return result;
+  }
+  if (outcome.outcome === 'unchecked') return result;
+  return fail(
+    entry.scopeId,
+    result.position,
+    outcome.outcome === 'unsupported' ? 'CHAIN_UNSUPPORTED_ALGORITHM' : 'CHAIN_FEDERATION_WIRE_INVALID',
+    outcome.detail,
+    result.signature,
+  );
 }
 
 /**
