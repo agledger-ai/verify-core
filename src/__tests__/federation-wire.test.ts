@@ -123,7 +123,7 @@ describe('a sealed federation message on a receiver\'s chain', () => {
     const r = verifyAuditExport(exp);
     expect(r.valid).toBe(true);
     expect(r.optionalChecks.federation_wire).toBe('applied');
-    expect(r.federationWire).toEqual({ present: 1, verified: 0 });
+    expect(r.federationWire).toEqual({ present: 1, verified: 0, failed: 0 });
   });
 
   it('is verified under the sender\'s federation key, given as SPKI DER or as the raw 32 bytes', () => {
@@ -131,17 +131,17 @@ describe('a sealed federation message on a receiver\'s chain', () => {
     for (const key of [sender.publicKey, raw32(sender.publicKey)]) {
       const r = verifyAuditExport(exp, { federationKeys: { [SENDER_HUB]: key } });
       expect(r.valid).toBe(true);
-      expect(r.federationWire).toEqual({ present: 1, verified: 1 });
+      expect(r.federationWire).toEqual({ present: 1, verified: 1, failed: 0 });
     }
     const listed = verifyAuditExport(exp, { federationKeys: [{ hubId: SENDER_HUB, publicKey: sender.publicKey }] });
-    expect(listed.federationWire).toEqual({ present: 1, verified: 1 });
+    expect(listed.federationWire).toEqual({ present: 1, verified: 1, failed: 0 });
   });
 
   it('a key for another hub checks nothing here', () => {
     const exp = exportWithWire(vault, AT, projection(sealed(sender, body)));
     const r = verifyAuditExport(exp, { federationKeys: { 'hub-other': stranger.publicKey } });
     expect(r.valid).toBe(true);
-    expect(r.federationWire).toEqual({ present: 1, verified: 0 });
+    expect(r.federationWire).toEqual({ present: 1, verified: 0, failed: 0 });
   });
 
   it('fails when the sealed sender key is not the key the sender\'s operator supplied', () => {
@@ -153,6 +153,7 @@ describe('a sealed federation message on a receiver\'s chain', () => {
     expect(r.valid).toBe(false);
     expect(r.brokenAt).toMatchObject({ position: AT + 1, code: 'CHAIN_FEDERATION_WIRE_INVALID' });
     expect(r.brokenAt?.detail).toContain('not the federation key supplied');
+    expect(r.federationWire).toEqual({ present: 1, verified: 0, failed: 1 });
   });
 
   it('fails when the signature does not verify under the supplied key', () => {
@@ -165,6 +166,7 @@ describe('a sealed federation message on a receiver\'s chain', () => {
     expect(r.valid).toBe(false);
     expect(r.brokenAt).toMatchObject({ position: AT + 1, code: 'CHAIN_FEDERATION_WIRE_INVALID' });
     expect(r.brokenAt?.detail).toContain('does not verify');
+    expect(r.federationWire).toEqual({ present: 1, verified: 0, failed: 1 });
   });
 
   it('fails when the sealed body no longer hashes to what was signed, with or without a key', () => {
@@ -175,6 +177,7 @@ describe('a sealed federation message on a receiver\'s chain', () => {
     expect(r.valid).toBe(false);
     expect(r.brokenAt).toMatchObject({ position: AT + 1, code: 'CHAIN_FEDERATION_WIRE_INVALID' });
     expect(r.brokenAt?.detail).toContain('does not hash');
+    expect(r.federationWire).toEqual({ present: 1, verified: 0, failed: 1 });
   });
 
   it('fails when the entry asserts a state the sealed body does not carry', () => {
@@ -203,7 +206,7 @@ describe('a sealed federation message on a receiver\'s chain', () => {
     const r = verifyAuditExport(load('valid.json'));
     expect(r.valid).toBe(true);
     expect(r.optionalChecks.federation_wire).toBe('skipped_no_input');
-    expect(r.federationWire).toEqual({ present: 0, verified: 0 });
+    expect(r.federationWire).toEqual({ present: 0, verified: 0, failed: 0 });
   });
 
   it('refuses a federation key that is not an Ed25519 key before verifying anything', () => {
