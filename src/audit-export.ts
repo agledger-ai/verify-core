@@ -238,7 +238,7 @@ export interface VerifyExportOptions {
    * has its signature re-verified under that key, which proves what the peer
    * asserted from this export alone. A failure is
    * CHAIN_FEDERATION_WIRE_INVALID. `result.federationWire` counts how many were
-   * present and how many were verified under a key. A key that is not an
+   * present, how many were verified under a key, and how many failed. A key that is not an
    * Ed25519 key throws `TypeError`.
    */
   federationKeys?: Readonly<Record<string, string>> | ReadonlyArray<FederationKeyEntry>;
@@ -308,10 +308,11 @@ export interface VerifyExportResult {
   /**
    * Federation messages sealed on the chain (`payload.wire`) vs re-verified
    * under a `federationKeys` entry for their sender. Every present one held
-   * to its body hash and to its entry; `present > verified` means no key was
-   * supplied for those senders, never that they failed.
+   * to its body hash and to its entry; `failed` counts those that failed a
+   * check, and `present - verified - failed` is the ones from a hub with no
+   * key supplied.
    */
-  federationWire: { present: number; verified: number };
+  federationWire: { present: number; verified: number; failed: number };
   /**
    * `trusted`, `unanchored` or `failed` (see `Verdict`). Read this rather
    * than `valid` alone: a valid result with no `trustAnchors`, or none that
@@ -591,7 +592,7 @@ function earlyFailure(recordId: string, totalEntries: number, detail: string): V
     keyProvenance: { supplied: 0, embedded: 0 },
     unsignedProjectionFields: [],
     agentSignatures: { present: 0, verified: 0 },
-    federationWire: { present: 0, verified: 0 },
+    federationWire: { present: 0, verified: 0, failed: 0 },
     keyTrust: reportKeyTrust(new Map(), null, null),
     verdict: 'failed',
   };

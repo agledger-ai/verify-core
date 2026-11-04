@@ -362,11 +362,12 @@ export interface ChainResult {
    * Server's FEDERATION_* entries). `present` counts entries that passed every
    * other check and carry one, each held to its own body hash and to the entry
    * that carries it; `verified` counts those whose sealed signature was also
-   * checked under a `federationKeys` entry for the sending hub and found good.
-   * `present > verified` on a valid chain means no key was supplied for those
-   * senders, never that they failed.
+   * checked under a `federationKeys` entry for the sending hub and found good;
+   * `failed` counts those that failed a check (a body hash, the entry, or the
+   * signature under the key given for the hub). `present - verified - failed`
+   * is the messages from a hub with no key supplied.
    */
-  federationWire: { present: number; verified: number };
+  federationWire: { present: number; verified: number; failed: number };
 }
 
 export interface VerifyChainOptions {
@@ -509,7 +510,7 @@ export function verifyChain(
   };
   const keyProvenance = { supplied: 0, embedded: 0 };
   const agentSignatures = { present: 0, verified: 0 };
-  const federationWire = { present: 0, verified: 0 };
+  const federationWire = { present: 0, verified: 0, failed: 0 };
   let verifiedEntries = 0;
   let brokenAt: ChainResult['brokenAt'];
   const accounted: AccountedEntry[] = [];
@@ -633,7 +634,7 @@ function checkSealedFederationWire(
   result: ChainEntryResult,
   federationKeys: FederationKeyRegistry | undefined,
   optionalChecks: Record<OptionalCheck, CheckApplicability>,
-  counts: { present: number; verified: number },
+  counts: { present: number; verified: number; failed: number },
 ): ChainEntryResult {
   if (entry.binding === undefined) return result;
   const wire = extractFederationWire(entry.binding.payload);
@@ -655,6 +656,7 @@ function checkSealedFederationWire(
     return result;
   }
   if (outcome.outcome === 'unchecked') return result;
+  counts.failed++;
   return fail(
     entry.scopeId,
     result.position,

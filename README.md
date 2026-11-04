@@ -356,7 +356,7 @@ import { verifyAuditExport } from '@agledger/verify-core';
 
 const result = verifyAuditExport(exportDocument, { federationKeys: { 'hub-b': 'MCowBQYDK2VwAyEA...' } });
 
-console.log(result.federationWire); // e.g. { present: 2, verified: 2 }
+console.log(result.federationWire); // e.g. { present: 2, verified: 2, failed: 0 }
 ```
 
 A sealed signature that does not verify, a sealed key that is not the one
