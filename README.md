@@ -504,3 +504,5 @@ a key fetched from the Server comes from its database too. Trust is what
 ## License
 
 Proprietary. See [LICENSE](./LICENSE). © AGLedger LLC. All rights reserved.
+
+AGLedger is a trademark of AGLedger LLC. All other trademarks are the property of their respective owners. Patent pending.
