@@ -196,7 +196,7 @@ const SUGGESTIONS: Record<FailureCode, string> = {
   CHAIN_KEY_WINDOW_DRIFT:
     'A key registry column (activatedAt, retiredAt or status in a dump row or key document) differs from the value its signed key statements carry. The signed value is the one entries are graded against; the column was rewritten, or the retirement was written without its closure statement. Treat the registry as tampered and compare it with the Server\'s own scan (key_window_drift). Where the detail names a distrust entry the listing says the Server applies (distrustedFrom, VAULT_DISTRUSTED_KEYS), the listed retirement may be that entry\'s cut, which the verifier was not given or was given at another instant; the listing\'s word is unsigned, so it stays tampering until the Server\'s operator confirms the entry.',
   CHECKPOINT_ROW_MISSING:
-    'A signed checkpoint anchors a position that has no matching chain row. The chain was truncated below a checkpoint (out-of-band DELETE/TRUNCATE). The checkpoint is proof of the missing rows.',
+    'A signed checkpoint anchors a position that has no matching chain row. Chain entries below a checkpoint were removed out of band. The checkpoint is proof of the missing entries.',
   CHECKPOINT_HASH_MISMATCH:
     'A checkpoint\'s payloadHash does not match the chain row at its position. The chain diverged from what was checkpointed. Treat the chain as tampered.',
   CHECKPOINT_SIGNATURE_INVALID:

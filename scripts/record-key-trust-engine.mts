@@ -41,8 +41,8 @@ type EngineTrust = {
 const verdictOfEngine = (t: EngineTrust, asDocument: boolean): Verdict => verdictOf({
   trusted: t.anchored,
   windowOf: (d: string) => t.byDigest.get(d),
-  // Over a key document, what the engine accounts for a verifier reports as a
-  // finding (vault.service's publishedFindings), since a document's write
+  // Over a key document, what the Server accounts for a verifier reports as a
+  // finding, since a document's write
   // times are not held against anything.
   findings: [...t.findings, ...(asDocument ? t.accounted : [])].map((f) => ({ code: CODE[f.class] ?? f.class, statementId: f.statementId, keyId: f.keyId })),
   accounted: asDocument ? [] : t.accounted,
