@@ -18,6 +18,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 - The README says the package reads exports and dumps from an AGLedger Server 2.0 or later and names the last release that reads a 1.x Server's.
 
+### Fixed
+
+- **`keyProvenance` counts every signed entry.** An entry whose signature verified and which a later check then failed (an agent signature, a sealed federation message) counted toward `signatureCoverage.signed` but toward neither `keyProvenance.supplied` nor `keyProvenance.embedded`. It now keeps the key source, so the two add up to `signed`.
+
 ## [2.0.0] - 2026-10-05
 
 This release targets AGLedger API 2.0 and reads nothing older. 1.6.0 was never published; its changes are part of this release.
