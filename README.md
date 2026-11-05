@@ -52,8 +52,8 @@ console.log(result.verdict); // 'trusted', or 'unanchored' when nothing pinned b
 Read `verdict` rather than `valid`: a valid result with no `trustAnchors` is
 `unanchored`, which is not a trusted verdict. An option the function does not
 read throws `TypeError` rather than being ignored, so a misspelt option, or
-`requireOutOfBandKeys` (renamed `requireSuppliedKeys` in 2.0.0), cannot turn a
-check off without a word.
+the old name `requireOutOfBandKeys` (the option is `requireSuppliedKeys`),
+cannot turn a check off without a word.
 
 ## What it verifies
 
@@ -110,7 +110,8 @@ which ran, so "not checked" never reads as "passed".
 
 A vault key the Server publishes comes from its database, and anything with
 write access to that database can add a key row and entries signed with it.
-What it cannot add is a **key statement**: a COSE_Sign1 signed by a key the
+What it cannot add, unless it also holds the private half of a key you trust,
+is a **key statement**: a COSE_Sign1 signed by a key the
 Server already trusted (and, for a new key, by the new key too). Pass the SPKI
 digest of a vault key you hold or took out of band as `trustAnchors`, and the
 verifier walks the statements from it:
@@ -134,7 +135,7 @@ statements sign. `keyTrust.status` says whether a pass can be trusted:
 - `no_anchored_signature`: the walk ran, but no entry verified under a key it
   anchors, so `optionalChecks.key_anchoring` is `not_checked`. An export of
   entries written before the install began signing passes under any pin, and
-  proves nothing about the pin.
+  says nothing about the pin.
 
 A pass on `no_anchor` or `no_anchored_signature` is not a trusted verdict; the
 `detail` says so, and `verdict` (and every AGLedger surface) reports it as
@@ -198,7 +199,7 @@ no longer trusted and its window no longer graded.
 Statements are walked in the order the Server's database stored them,
 `createdAt` then the row `id`, never by an instant a statement signs. A dump
 carries that order (`created_at`), and so does every key document a Server 2.0
-Server serves: each statement in an export's `signingKeyStatements`,
+or later serves: each statement in an export's `signingKeyStatements`,
 `/v1/verification-keys` and `/.well-known/agledger-vault-keys.json` carries
 its row `id` and `createdAt` at microsecond precision, and `keyTrust.order`
 reads `written`. A `createdAt` that is not strict RFC 3339 (a `T`, an offset
@@ -315,13 +316,20 @@ times are not the Server's word.
 this host cannot compute (Ed25519 history on a FIPS host) is `undecided`, and
 entries under it are `CHAIN_UNSUPPORTED_ALGORITHM` rather than unanchored.
 
+## What verification does not prove
+
+- **That the work was good or true.** AGLedger records what was asked, what was submitted and the principal's verdict. It does not inspect deliverable content, and a pass says nothing about it.
+- **That nothing is missing at the ends.** The chain is checked from its first entry to its last. Entries removed from the end, or an export or dump withheld whole, show up only against a signed checkpoint or a copy you already hold.
+- **That a trusted key was never misused.** Anchoring proves each signing key links back to a key you pinned. Whoever holds a trusted key's private half can sign entries that verify. A compromise is accounted for after the fact by distrusting the key (`distrustedKeys`) from the instant it leaked.
+- **Anything, without a trust anchor.** An unanchored pass shows only that the export agrees with the keys it carries itself.
+
 ## Agent signatures
 
 An agent that authenticates with an ephemeral cert can sign each request body
 it sends. The Server checks that signature, then seals it into the chain entry
 as `predicate.on_behalf_of.agent_signature`, beside the RFC 7638 thumbprint of
-the cert's public key. The envelope signature proves the Server wrote that. To
-prove the agent itself signed, without taking the Server's word for it,
+the cert's public key. The envelope signature covers it as the Server wrote it. To
+check that the agent itself signed, without taking the Server's word for it,
 re-verify the agent signature against the cert's public key.
 
 The export does not carry cert public keys. Supply them as the Ed25519 JWK the
@@ -399,7 +407,7 @@ history does not list at all, such as the key in use before a change made with
 neither predecessor setting: a second entry for the hub pins it, and it is
 trusted on its own. A history that is another hub's, carries a statement that
 does not verify, or lists none of the keys pinned for its hub throws
-`TypeError` before anything is verified.
+`TypeError` before anything is verified. Federation key histories need a Server 2.2 or later on the peer.
 
 A sealed signature that does not verify, a sealed key that is not the one
 supplied for that hub, a body that no longer hashes to what was signed, or an
@@ -422,12 +430,12 @@ runtime. An active OpenSSL FIPS provider carries no EdDSA, so **an Ed25519
 chain cannot be verified on a FIPS-locked host**. ES256 chains can.
 
 That is reported as `CHAIN_UNSUPPORTED_ALGORITHM`, never as a signature
-failure. The distinction is the whole point: "I could not check this" and "I
+failure. The two are kept apart because "I could not check this" and "I
 checked this and it failed" lead to opposite conclusions, and only one of them
 is grounds for a tamper investigation. The result still fails closed, because
 an unverified chain is not a verified one. To actually verify an Ed25519 chain,
 re-run on a host without the restriction; the export and keys are portable and
-the verification is entirely offline, so this costs nothing but a second host.
+the verification is entirely offline, so all it needs is a second host.
 
 ### Asking about an algorithm directly
 

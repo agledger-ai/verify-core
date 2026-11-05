@@ -8,8 +8,9 @@
  *
  * Re-implemented here (not imported from any Server or SDK code) so the
  * verifier has zero Server dependency, the load-bearing property of an offline
- * auditor: it runs no Server code, so given keys held out of band, a
- * compromised Server cannot make it report a pass it did not earn.
+ * auditor: it runs no Server code, so a Server that does not hold a key you
+ * trust cannot make it pass an export. Anchoring and its limits are described
+ * in the README under "What verification does not prove".
  * The only runtime dependency is `cborg`, a general-purpose CBOR library (not
  * AGLedger code), and Node's built-in `crypto`. No network, no filesystem.
  *

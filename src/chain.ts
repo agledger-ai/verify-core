@@ -256,8 +256,8 @@ export interface SignatureOutcome {
   /**
    * - `ok` / `invalid` / `decode-fail`: the signature was checked (and passed,
    *   failed, or the envelope would not decode).
-   * - `unsigned`: retained for type compatibility; `verifyChain` no longer
-   *   produces it. An all-zero signature on an entry that names a key is
+   * - `unsigned`: kept for type compatibility; `verifyChain` does not
+   *   produce it. An all-zero signature on an entry that names a key is
    *   `invalid` (CHAIN_SIGNATURE_INVALID), as the Server grades it.
    * - `skipped`: the chain is intact but this entry has no signing key, so the
    *   signature check was deliberately not run. Only an entry written before
@@ -979,7 +979,7 @@ function verifyEntry(
         scopeId,
         expectedPosition,
         'CHAIN_PAYLOAD_BINDING_MISMATCH',
-        'Denormalised row payload no longer matches the canonical projection of the signed predicate.',
+        'Denormalised row payload does not match the canonical projection of the signed predicate.',
       );
     }
   }
@@ -1279,11 +1279,11 @@ function checkOidcActor(
 }
 
 /**
- * Temporal key-validity, split by direction. Both directions used to report
- * `CHAIN_KEY_EXPIRED`, so a consumer branching on the code saw "expired" for a
- * key that had not started yet and would reason about rotation or retention
- * when the real condition is clock skew or backdating. Those are different
- * investigations, and the activation side is the security-relevant one.
+ * Temporal key-validity, split by direction. A key not yet active reports
+ * `CHAIN_KEY_NOT_YET_ACTIVE` and a retired key reports `CHAIN_KEY_EXPIRED`, so a
+ * consumer branching on the code does not read clock skew or backdating as
+ * rotation or retention. Those are different investigations, and the
+ * activation side is the security-relevant one.
  */
 function temporalKeyFailure(
   createdAt: string,

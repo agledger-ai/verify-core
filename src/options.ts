@@ -1,7 +1,7 @@
 /**
- * Options renamed in a major release, by their old name. A caller upgrading
- * with the old name would otherwise drop the check it asked for and still
- * pass.
+ * Option names an earlier major release read, mapped to their current name. A
+ * caller still passing the old name would otherwise drop the check it asked
+ * for and still pass.
  */
 const RENAMED: Readonly<Record<string, string>> = {
   requireOutOfBandKeys: 'requireSuppliedKeys',
@@ -23,7 +23,7 @@ export function assertKnownOptions(fn: string, options: unknown, known: readonly
     const renamed = RENAMED[key];
     throw new TypeError(
       renamed !== undefined && known.includes(renamed)
-        ? `${fn}: the ${key} option is now ${renamed}; pass ${renamed} instead. It was renamed in 2.0.0, and an unknown option is refused rather than ignored.`
+        ? `${fn}: the ${key} option is now ${renamed}; pass ${renamed} instead. An unknown option is refused rather than ignored.`
         : `${fn}: unknown option ${key}. It reads ${known.join(', ')}.`,
     );
   }
