@@ -8,9 +8,9 @@
  *
  * Re-implemented here (not imported from any Server or SDK code) so the
  * verifier has zero Server dependency, the load-bearing property of an offline
- * auditor: it runs no Server code, so a Server that does not hold a key you
- * trust cannot make it pass an export. Anchoring and its limits are described
- * in the README under "What verification does not prove".
+ * auditor: it runs no Server code, so a Server that holds no key you
+ * trust cannot make it return a `trusted` verdict: that needs `trustAnchors`
+ * linking the signing keys to a key you pinned.
  * The only runtime dependency is `cborg`, a general-purpose CBOR library (not
  * AGLedger code), and Node's built-in `crypto`. No network, no filesystem.
  *
