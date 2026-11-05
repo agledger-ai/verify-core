@@ -94,6 +94,13 @@ check off without a word.
   activation window. With `trustAnchors`, the window is the one the key
   statements sign.
 - **Agent signatures**, when you supply the agent's cert key (below).
+- **Inlined evidence**, on an export taken with `?evidence=true`: each
+  completion's evidence body and each dispute's filed payload hashes (SHA-256
+  over its RFC 8785 form) to the `payload.evidenceHash` or `payload.payloadHash`
+  its entry signs, or the entry fails `CHAIN_EVIDENCE_BINDING_MISMATCH`.
+  `result.evidenceBinding` counts them. An encrypted-mode completion signs a
+  hash over a cleartext the export does not carry, so its ciphertext is counted
+  as `clientHashed`, not re-bound.
 
 The payload, OIDC, attribution and key-window checks run when the export
 carries their inputs, which every current Server does. The result's `optionalChecks` says
@@ -377,16 +384,22 @@ const result = verifyAuditExport(exportDocument, {
 ```
 
 The windows come from the signed statements, not the document's `keys`
-summary, and each entry is placed by its `createdAt` on the receiver's chain.
-A message under a key activated after the receiver took it fails. One under a
-key retired before the receiver took it verifies and is counted in
-`federationWire.afterRetirement`: a peer process not yet restarted onto the new
-key sends exactly that, and it is in order when the receiver's
-`federation.peer_revoked` audit row for the peer comes after it. A key behind a
-genesis that named it only by digest (`linked: false`) is not linked to the
-newer keys; name the hub a second time with that key once its operator
-confirms it. A history that is another hub's, carries a statement that does not
-verify, or never reaches the pin throws `TypeError` before anything is verified.
+summary. Each message is placed by its sealed `wire.timestamp`, which the peer
+signed and the receiver sealed under its own signature, and which comes from
+the peer's clock, the same clock its windows are written by. The entry's
+`createdAt` is not signed, so it places nothing. A message signed under a key
+before that key's activation fails. One signed under a key after the key's
+retirement verifies and is counted in `federationWire.afterRetirement`: a peer
+process not yet restarted onto the new key sends exactly that, and it is in
+order when the receiver's `federation.peer_revoked` audit row for the peer
+comes after it. A key behind a genesis that named it only by digest
+(`linked: false`) is not linked to the newer keys; name the hub a second time
+with that key once its operator confirms it. The same goes for a key the
+history does not list at all, such as the key in use before a change made with
+neither predecessor setting: a second entry for the hub pins it, and it is
+trusted on its own. A history that is another hub's, carries a statement that
+does not verify, or lists none of the keys pinned for its hub throws
+`TypeError` before anything is verified.
 
 A sealed signature that does not verify, a sealed key that is not the one
 supplied for that hub, a body that no longer hashes to what was signed, or an

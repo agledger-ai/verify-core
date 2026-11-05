@@ -29,6 +29,7 @@ export type {
   SignatureOutcome,
   ChainEntryResult,
   ChainResult,
+  EvidenceBindingCounts,
   VerifyChainOptions,
 } from './chain.js';
 

@@ -263,12 +263,18 @@ describe('a sealed federation message under a key the sender has since changed',
   const succession = read<FederationKeyHistoryDocument>('succession.json');
   const byDigest = read<FederationKeyHistoryDocument>('genesis-by-digest.json');
 
-  const exportUnder = (key: TestKey, receivedAt: string) => {
-    const wire = sealed(key, body, { senderHubId: hub });
-    // `sealed` signs before the override lands; re-sign over the real sender hub.
+  /**
+   * An export whose entry seals a message the sender signed under `key` at
+   * `signedAt`. The entry's `createdAt` is set to a time inside no window at
+   * all, so a test passes only if the walk places the message by the signed
+   * timestamp.
+   */
+  const exportUnder = (key: TestKey, signedAt: string, createdAt = '2030-01-01T00:00:00.000Z') => {
+    const wire = sealed(key, body, { senderHubId: hub, timestamp: signedAt });
+    // `sealed` signs before the override lands; re-sign over the real sender hub and timestamp.
     const priv = { key: Buffer.from(key.privateKey, 'base64'), format: 'der' as const, type: 'pkcs8' as const };
     wire.signature = sign(null, Buffer.from(federationSignInput(wire), 'utf8'), priv).toString('hex');
-    return exportWithWire(vault, AT, projection(wire, { peerHubId: hub }), receivedAt);
+    return exportWithWire(vault, AT, projection(wire, { peerHubId: hub }), createdAt);
   };
 
   it('verifies an entry sealed under an earlier key, linked to the key you pinned by successions', () => {
@@ -294,7 +300,7 @@ describe('a sealed federation message under a key the sender has since changed',
     expect(r.brokenAt?.detail).toMatch(/agledger-federation-keys\.json/);
   });
 
-  it('fails a message the receiver took before its key was activated', () => {
+  it('fails a message signed under a key before the key was activated', () => {
     const r = verifyAuditExport(exportUnder(k('K2'), '2026-11-05T04:22:01.000Z'), {
       federationKeys: [{ hubId: hub, publicKey: k('K3').publicKey, history: succession }],
     });
@@ -302,7 +308,7 @@ describe('a sealed federation message under a key the sender has since changed',
     expect(r.brokenAt?.detail).toMatch(/activates at 2026-11-05T04:22:03\.323630Z/);
   });
 
-  it('verifies but counts a message the receiver took after its key was retired', () => {
+  it('verifies but counts a message signed under a key after the key was retired', () => {
     const r = verifyAuditExport(exportUnder(k('K1'), '2026-11-05T04:22:05.000Z'), {
       federationKeys: [{ hubId: hub, publicKey: k('K3').publicKey, history: succession }],
     });
@@ -339,6 +345,55 @@ describe('a sealed federation message under a key the sender has since changed',
     (altered.statements as Array<typeof stmt>)[1] = { ...stmt, payload: stmt.payload.replace('04:22:03', '04:21:03') };
     expect(() => buildFederationKeyRegistry([{ hubId: hub, publicKey: k('K3').publicKey, history: altered }])).toThrow(/does not hold/);
     expect(() => buildFederationKeyRegistry([{ hubId: 'another-hub', publicKey: k('K3').publicKey, history: succession }])).toThrow(/key history of hub/);
-    expect(() => buildFederationKeyRegistry([{ hubId: hub, publicKey: stranger.publicKey, history: succession }])).toThrow(/appears in none of the key histories/);
+    expect(() => buildFederationKeyRegistry([{ hubId: hub, publicKey: stranger.publicKey, history: succession }])).toThrow(/no key pinned for hub .* appears in the key history/);
+  });
+
+  it('places a message by its signed timestamp: an edited createdAt moves no verdict', () => {
+    const opts = { federationKeys: [{ hubId: hub, publicKey: k('K3').publicKey, history: succession }] };
+    // Inside K2's window by the signature, outside it by either createdAt.
+    for (const createdAt of ['2026-11-05T04:22:01.000Z', '2026-11-05T04:22:20.000Z']) {
+      const r = verifyAuditExport(exportUnder(k('K2'), '2026-11-05T04:22:05.000Z', createdAt), opts);
+      expect(r.valid).toBe(true);
+      expect(r.federationWire).toEqual({ present: 1, verified: 1, failed: 0, afterRetirement: 0 });
+    }
+  });
+
+  it('an edited wire.timestamp breaks the receiver\'s signature over the entry', () => {
+    const exp = exportUnder(k('K2'), '2026-11-05T04:22:05.000Z');
+    const wire = exp.entries[AT]!.payload!.wire as FederationWire;
+    wire.timestamp = '2026-11-05T04:22:20.000Z';
+    const r = verifyAuditExport(exp, { federationKeys: [{ hubId: hub, publicKey: k('K3').publicKey, history: succession }] });
+    expect(r.valid).toBe(false);
+    expect(r.brokenAt?.code).toBe('CHAIN_PAYLOAD_BINDING_MISMATCH');
+  });
+
+  it('fails a message whose timestamp is not an RFC 3339 instant when its key has a window', () => {
+    const r = verifyAuditExport(exportUnder(k('K2'), 'Thu, 05 Nov 2026 04:22:05 GMT'), {
+      federationKeys: [{ hubId: hub, publicKey: k('K3').publicKey, history: succession }],
+    });
+    expect(r.valid).toBe(false);
+    expect(r.brokenAt?.detail).toMatch(/not an RFC 3339 instant/);
+  });
+
+  it('a pin the history does not list sits beside the history and is trusted on its own', () => {
+    // `stranger` stands in for a key from before a change made with neither
+    // predecessor setting: no statement in the history names it.
+    const strangerMsg = exportUnder(stranger, '2026-11-05T04:21:00.000Z');
+    const pins = [
+      { hubId: hub, publicKey: k('K3').publicKey, history: succession },
+      { hubId: hub, publicKey: stranger.publicKey },
+    ];
+    expect(verifyAuditExport(strangerMsg, { federationKeys: pins }).federationWire).toEqual({ present: 1, verified: 1, failed: 0, afterRetirement: 0 });
+    // The history still walks from the listed pin.
+    expect(verifyAuditExport(exportUnder(k('K1'), '2026-11-05T04:22:02.000Z'), { federationKeys: pins }).valid).toBe(true);
+    // Without the second pin the stranger's message is not trusted.
+    expect(verifyAuditExport(strangerMsg, { federationKeys: [pins[0]!] }).valid).toBe(false);
+  });
+
+  it('a hub whose pins the history lists none of is refused, naming each pin', () => {
+    expect(() => buildFederationKeyRegistry([
+      { hubId: hub, publicKey: stranger.publicKey, history: succession },
+      { hubId: hub, publicKey: k('K4').publicKey },
+    ])).toThrow(/federationKeys\[0\] \([0-9a-f]{16}\), federationKeys\[1\] \([0-9a-f]{16}\)/);
   });
 });
