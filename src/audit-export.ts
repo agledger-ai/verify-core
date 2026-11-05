@@ -240,6 +240,14 @@ export interface VerifyExportOptions {
    * CHAIN_FEDERATION_WIRE_INVALID. `result.federationWire` counts how many were
    * present, how many were verified under a key, and how many failed. A key that is not an
    * Ed25519 key throws `TypeError`.
+   *
+   * After a sender changes its federation key, entries from before the change
+   * seal the earlier key. Give the list form an entry's `history`, the
+   * sender's `GET /.well-known/agledger-federation-keys.json`, beside the key
+   * you pinned: every key the history links to the pin through successions
+   * both keys signed is trusted inside its window, placed by the entry's
+   * `createdAt`. A history that is another hub's, carries a statement that
+   * does not verify, or never reaches the pin throws `TypeError`.
    */
   federationKeys?: Readonly<Record<string, string>> | ReadonlyArray<FederationKeyEntry>;
 }
@@ -310,9 +318,10 @@ export interface VerifyExportResult {
    * under a `federationKeys` entry for their sender. Every present one held
    * to its body hash and to its entry; `failed` counts those that failed a
    * check, and `present - verified - failed` is the ones from a hub with no
-   * key supplied.
+   * key supplied. `afterRetirement` counts verified ones sealed under a key
+   * the sender's history retired before the entry was written.
    */
-  federationWire: { present: number; verified: number; failed: number };
+  federationWire: { present: number; verified: number; failed: number; afterRetirement: number };
   /**
    * `trusted`, `unanchored` or `failed` (see `Verdict`). Read this rather
    * than `valid` alone: a valid result with no `trustAnchors`, or none that
@@ -592,7 +601,7 @@ function earlyFailure(recordId: string, totalEntries: number, detail: string): V
     keyProvenance: { supplied: 0, embedded: 0 },
     unsignedProjectionFields: [],
     agentSignatures: { present: 0, verified: 0 },
-    federationWire: { present: 0, verified: 0, failed: 0 },
+    federationWire: { present: 0, verified: 0, failed: 0, afterRetirement: 0 },
     keyTrust: reportKeyTrust(new Map(), null, null),
     verdict: 'failed',
   };

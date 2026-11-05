@@ -6,12 +6,14 @@
  * test sender key the walk under test never saw.
  */
 import { createHash, sign } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { decode as cborDecode, encode as cborEncode, rfc8949EncodeOptions } from 'cborg';
 import { verifyAuditExport, type RecordAuditExportInput } from '../audit-export.js';
 import {
   buildFederationKeyRegistry,
   canonicalizeJson,
+  type FederationKeyHistoryDocument,
   federationSignInput,
   normalizeFederationKey,
   type FederationWire,
@@ -51,8 +53,9 @@ function sealed(sender: TestKey, body: Record<string, unknown>, over: Partial<Fe
  * every entry re-signed under `vault` and the chain relinked. What a
  * receiving Server's export looks like, under a key this test holds.
  */
-function exportWithWire(vault: TestKey, at: number, payload: Record<string, unknown>): RecordAuditExportInput {
+function exportWithWire(vault: TestKey, at: number, payload: Record<string, unknown>, createdAt?: string): RecordAuditExportInput {
   const exp = load('valid.json');
+  if (createdAt !== undefined) exp.entries[at]!.createdAt = createdAt;
   const priv = { key: Buffer.from(vault.privateKey, 'base64'), format: 'der' as const, type: 'pkcs8' as const };
   let prev: Buffer | null = null;
   exp.entries.forEach((e, i) => {
@@ -123,7 +126,7 @@ describe('a sealed federation message on a receiver\'s chain', () => {
     const r = verifyAuditExport(exp);
     expect(r.valid).toBe(true);
     expect(r.optionalChecks.federation_wire).toBe('applied');
-    expect(r.federationWire).toEqual({ present: 1, verified: 0, failed: 0 });
+    expect(r.federationWire).toEqual({ present: 1, verified: 0, failed: 0, afterRetirement: 0 });
   });
 
   it('is verified under the sender\'s federation key, given as SPKI DER or as the raw 32 bytes', () => {
@@ -131,17 +134,17 @@ describe('a sealed federation message on a receiver\'s chain', () => {
     for (const key of [sender.publicKey, raw32(sender.publicKey)]) {
       const r = verifyAuditExport(exp, { federationKeys: { [SENDER_HUB]: key } });
       expect(r.valid).toBe(true);
-      expect(r.federationWire).toEqual({ present: 1, verified: 1, failed: 0 });
+      expect(r.federationWire).toEqual({ present: 1, verified: 1, failed: 0, afterRetirement: 0 });
     }
     const listed = verifyAuditExport(exp, { federationKeys: [{ hubId: SENDER_HUB, publicKey: sender.publicKey }] });
-    expect(listed.federationWire).toEqual({ present: 1, verified: 1, failed: 0 });
+    expect(listed.federationWire).toEqual({ present: 1, verified: 1, failed: 0, afterRetirement: 0 });
   });
 
   it('a key for another hub checks nothing here', () => {
     const exp = exportWithWire(vault, AT, projection(sealed(sender, body)));
     const r = verifyAuditExport(exp, { federationKeys: { 'hub-other': stranger.publicKey } });
     expect(r.valid).toBe(true);
-    expect(r.federationWire).toEqual({ present: 1, verified: 0, failed: 0 });
+    expect(r.federationWire).toEqual({ present: 1, verified: 0, failed: 0, afterRetirement: 0 });
   });
 
   it('fails when the sealed sender key is not the key the sender\'s operator supplied', () => {
@@ -153,7 +156,7 @@ describe('a sealed federation message on a receiver\'s chain', () => {
     expect(r.valid).toBe(false);
     expect(r.brokenAt).toMatchObject({ position: AT + 1, code: 'CHAIN_FEDERATION_WIRE_INVALID' });
     expect(r.brokenAt?.detail).toContain('not the federation key supplied');
-    expect(r.federationWire).toEqual({ present: 1, verified: 0, failed: 1 });
+    expect(r.federationWire).toEqual({ present: 1, verified: 0, failed: 1, afterRetirement: 0 });
   });
 
   it('fails when the signature does not verify under the supplied key', () => {
@@ -166,7 +169,7 @@ describe('a sealed federation message on a receiver\'s chain', () => {
     expect(r.valid).toBe(false);
     expect(r.brokenAt).toMatchObject({ position: AT + 1, code: 'CHAIN_FEDERATION_WIRE_INVALID' });
     expect(r.brokenAt?.detail).toContain('does not verify');
-    expect(r.federationWire).toEqual({ present: 1, verified: 0, failed: 1 });
+    expect(r.federationWire).toEqual({ present: 1, verified: 0, failed: 1, afterRetirement: 0 });
   });
 
   it('fails when the sealed body no longer hashes to what was signed, with or without a key', () => {
@@ -177,7 +180,7 @@ describe('a sealed federation message on a receiver\'s chain', () => {
     expect(r.valid).toBe(false);
     expect(r.brokenAt).toMatchObject({ position: AT + 1, code: 'CHAIN_FEDERATION_WIRE_INVALID' });
     expect(r.brokenAt?.detail).toContain('does not hash');
-    expect(r.federationWire).toEqual({ present: 1, verified: 0, failed: 1 });
+    expect(r.federationWire).toEqual({ present: 1, verified: 0, failed: 1, afterRetirement: 0 });
   });
 
   it('fails when the entry asserts a state the sealed body does not carry', () => {
@@ -206,7 +209,7 @@ describe('a sealed federation message on a receiver\'s chain', () => {
     const r = verifyAuditExport(load('valid.json'));
     expect(r.valid).toBe(true);
     expect(r.optionalChecks.federation_wire).toBe('skipped_no_input');
-    expect(r.federationWire).toEqual({ present: 0, verified: 0, failed: 0 });
+    expect(r.federationWire).toEqual({ present: 0, verified: 0, failed: 0, afterRetirement: 0 });
   });
 
   it('refuses a federation key that is not an Ed25519 key before verifying anything', () => {
@@ -237,5 +240,105 @@ describe('canonicalizeJson', () => {
 
   it('drops undefined members, writes -0 as 0 and sorts keys by code unit', () => {
     expect(canonicalizeJson({ b: 1, a: undefined, c: -0, 'Z': [undefined, NaN] })).toBe('{"Z":[null,null],"b":1,"c":0}');
+  });
+});
+
+
+/**
+ * Key histories served by a real Server (`GET /.well-known/agledger-federation-keys.json`)
+ * booted on K1, then K2 with K1 as AGLEDGER_FEDERATION_SIGNING_KEY_PREVIOUS,
+ * then K3 with K2 (`succession.json`), then K4 naming K3 only by
+ * AGLEDGER_FEDERATION_SIGNING_KEY_PREVIOUS_SPKI_SHA256 (`genesis-by-digest.json`).
+ * `keys.json` holds the four test keys, so a message can be sealed under each.
+ *
+ * Windows in succession.json: K1 from the start to 04:22:03.323630Z, K2 to
+ * 04:22:09.386169Z, K3 after.
+ */
+describe('a sealed federation message under a key the sender has since changed', () => {
+  const dir = new URL('./fixtures/federation-key-history/', import.meta.url);
+  const read = <T>(name: string): T => JSON.parse(readFileSync(new URL(name, dir), 'utf8')) as T;
+  const fedKeys = read<Record<string, { privateKey: string; publicKey: string }> & { instanceId: string }>('keys.json');
+  const hub = fedKeys.instanceId;
+  const k = (name: 'K1' | 'K2' | 'K3' | 'K4'): TestKey => ({ ...(fedKeys[name] as { privateKey: string; publicKey: string }), kid: '' }) as TestKey;
+  const succession = read<FederationKeyHistoryDocument>('succession.json');
+  const byDigest = read<FederationKeyHistoryDocument>('genesis-by-digest.json');
+
+  const exportUnder = (key: TestKey, receivedAt: string) => {
+    const wire = sealed(key, body, { senderHubId: hub });
+    // `sealed` signs before the override lands; re-sign over the real sender hub.
+    const priv = { key: Buffer.from(key.privateKey, 'base64'), format: 'der' as const, type: 'pkcs8' as const };
+    wire.signature = sign(null, Buffer.from(federationSignInput(wire), 'utf8'), priv).toString('hex');
+    return exportWithWire(vault, AT, projection(wire, { peerHubId: hub }), receivedAt);
+  };
+
+  it('verifies an entry sealed under an earlier key, linked to the key you pinned by successions', () => {
+    const r = verifyAuditExport(exportUnder(k('K1'), '2026-11-05T04:22:02.000Z'), {
+      federationKeys: [{ hubId: hub, publicKey: k('K3').publicKey, history: succession }],
+    });
+    expect(r.valid).toBe(true);
+    expect(r.federationWire).toEqual({ present: 1, verified: 1, failed: 0, afterRetirement: 0 });
+  });
+
+  it('walks forward too: a pin on the oldest key trusts the keys it handed over to', () => {
+    const r = verifyAuditExport(exportUnder(k('K3'), '2026-11-05T04:22:10.000Z'), {
+      federationKeys: [{ hubId: hub, publicKey: k('K1').publicKey, history: succession }],
+    });
+    expect(r.valid).toBe(true);
+    expect(r.federationWire.verified).toBe(1);
+  });
+
+  it('without the history, the earlier key is not the key you pinned, and the failure says what to supply', () => {
+    const r = verifyAuditExport(exportUnder(k('K1'), '2026-11-05T04:22:02.000Z'), { federationKeys: { [hub]: k('K3').publicKey } });
+    expect(r.valid).toBe(false);
+    expect(r.brokenAt?.code).toBe('CHAIN_FEDERATION_WIRE_INVALID');
+    expect(r.brokenAt?.detail).toMatch(/agledger-federation-keys\.json/);
+  });
+
+  it('fails a message the receiver took before its key was activated', () => {
+    const r = verifyAuditExport(exportUnder(k('K2'), '2026-11-05T04:22:01.000Z'), {
+      federationKeys: [{ hubId: hub, publicKey: k('K3').publicKey, history: succession }],
+    });
+    expect(r.valid).toBe(false);
+    expect(r.brokenAt?.detail).toMatch(/activates at 2026-11-05T04:22:03\.323630Z/);
+  });
+
+  it('verifies but counts a message the receiver took after its key was retired', () => {
+    const r = verifyAuditExport(exportUnder(k('K1'), '2026-11-05T04:22:05.000Z'), {
+      federationKeys: [{ hubId: hub, publicKey: k('K3').publicKey, history: succession }],
+    });
+    expect(r.valid).toBe(true);
+    expect(r.federationWire).toEqual({ present: 1, verified: 1, failed: 0, afterRetirement: 1 });
+  });
+
+  it('reads windows from the signed statements, never from the unsigned keys summary', () => {
+    const doctored = structuredClone(succession) as FederationKeyHistoryDocument & { keys: Array<{ activatedAt: string | null }> };
+    for (const key of doctored.keys) key.activatedAt = null;
+    const r = verifyAuditExport(exportUnder(k('K2'), '2026-11-05T04:22:01.000Z'), {
+      federationKeys: [{ hubId: hub, publicKey: k('K3').publicKey, history: doctored }],
+    });
+    expect(r.valid).toBe(false);
+  });
+
+  it('a genesis naming its predecessor by digest links nothing; pin the older key too to trust it', () => {
+    const k3msg = exportUnder(k('K3'), '2026-11-05T04:22:10.000Z');
+    const onlyNew = verifyAuditExport(k3msg, { federationKeys: [{ hubId: hub, publicKey: k('K4').publicKey, history: byDigest }] });
+    expect(onlyNew.valid).toBe(false);
+    expect(onlyNew.brokenAt?.detail).toMatch(/linked: false/);
+    const both = [
+      { hubId: hub, publicKey: k('K4').publicKey, history: byDigest },
+      { hubId: hub, publicKey: k('K3').publicKey },
+    ];
+    expect(verifyAuditExport(k3msg, { federationKeys: both }).valid).toBe(true);
+    // K1 sits behind K3 by successions both keys signed.
+    expect(verifyAuditExport(exportUnder(k('K1'), '2026-11-05T04:22:02.000Z'), { federationKeys: both }).valid).toBe(true);
+  });
+
+  it('refuses, before verifying anything, a history that was altered, is another hub\'s, or never reaches the pin', () => {
+    const altered = structuredClone(succession);
+    const stmt = altered.statements[1]!;
+    (altered.statements as Array<typeof stmt>)[1] = { ...stmt, payload: stmt.payload.replace('04:22:03', '04:21:03') };
+    expect(() => buildFederationKeyRegistry([{ hubId: hub, publicKey: k('K3').publicKey, history: altered }])).toThrow(/does not hold/);
+    expect(() => buildFederationKeyRegistry([{ hubId: 'another-hub', publicKey: k('K3').publicKey, history: succession }])).toThrow(/key history of hub/);
+    expect(() => buildFederationKeyRegistry([{ hubId: hub, publicKey: stranger.publicKey, history: succession }])).toThrow(/appears in none of the key histories/);
   });
 });
