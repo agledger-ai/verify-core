@@ -3,7 +3,7 @@ const RFC3339 = /^(\d{4})-(\d{2})-(\d{2})[Tt](\d{2}):(\d{2}):(\d{2})(?:\.(\d+))?
 
 /**
  * Milliseconds of an RFC 3339 instant, truncating any finer fraction the way
- * the engine reads a microsecond instant (its `instantToDate`). Key statements
+ * the Server reads a microsecond instant. Key statements
  * sign microsecond instants; entry write times, dump columns and key documents
  * carry milliseconds, so every comparison between them is made here. Strict:
  * a `T`, an offset or `Z`, a real calendar date and time of day; NaN for

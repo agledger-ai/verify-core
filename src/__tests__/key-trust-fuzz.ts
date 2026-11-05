@@ -1,10 +1,10 @@
 /**
- * Seeded random key registries for the engine differential
+ * Seeded random key registries for the Server differential
  * (key-trust-engine.test.ts). Everything that decides a verdict is a function
  * of the seed: the key pool is derived from fixed seeds, and statement ids and
  * times come from the seed's PRNG. ES256 signatures are randomized, which moves
  * no verdict. scripts/record-key-trust-engine.mts runs the same scenarios
- * through the engine's computeKeyTrust and records what it concluded.
+ * through the Server's computeKeyTrust and records what it concluded.
  */
 import { createHash, createPrivateKey, createPublicKey } from 'node:crypto';
 import { encodePayload, signStatement, type Payload, type TestKey } from './key-statements-helpers.js';
@@ -83,7 +83,7 @@ export const toMs = (instant: string) => `${instant.slice(0, 23)}Z`;
  * two anchors, later admissions of an anchor (a genesis it re-signs, or a
  * succession into it from any key), and sometimes distrusted keys with or
  * without a cutoff. Statements come back in write order, `createdUs` then
- * `id`, as the engine's loader reads them.
+ * `id`, as the Server's loader reads them.
  */
 export function scenario(seed: number): FuzzScenario {
   const r = prng(seed);
@@ -201,19 +201,19 @@ export function portInputAtMicroseconds(sc: FuzzScenario, order: (xs: FuzzStatem
   };
 }
 
-/** One key of the document the engine publishes for a scenario, as the recorder writes it. */
+/** One key of the document the Server publishes for a scenario, as the recorder writes it. */
 export interface PublishedFuzzKey {
   key: number;
   /** As the document publishes it, at milliseconds. */
   activatedAt: string;
   retiredAt: string | null;
-  /** The distrust cutoff the engine publishes for a key VAULT_DISTRUSTED_KEYS names. */
+  /** The distrust cutoff the Server publishes for a key VAULT_DISTRUSTED_KEYS names. */
   distrustedFrom?: string;
   /** The ids of the statements filed under the key, in write order. */
   statements: string[];
 }
 
-/** The `/v1/verification-keys` document the engine publishes for a scenario. */
+/** The `/v1/verification-keys` document the Server publishes for a scenario. */
 export function documentOf(sc: FuzzScenario, published: readonly PublishedFuzzKey[]): VerificationKeysDocument {
   const byId = new Map(sc.statements.map((s) => [s.id, s]));
   return {
@@ -237,7 +237,7 @@ export function documentOf(sc: FuzzScenario, published: readonly PublishedFuzzKe
 /**
  * What a walk concluded, keyed by pool index so it survives regeneration:
  * the trusted keys, each one's signed window, and every finding except
- * window drift. Drift is left out because the engine compares a column at the
+ * window drift. Drift is left out because the Server compares a column at the
  * microsecond precision its database holds and a dump carries milliseconds;
  * the unit tests pin drift at the dump's precision.
  */
@@ -279,7 +279,7 @@ export function verdictOf(t: {
 }
 
 export function portVerdict(trust: KeyTrust): Verdict {
-  // The engine folds a distrust cutoff into the window's upper edge; the port
+  // The Server folds a distrust cutoff into the window's upper edge; the port
   // carries it apart from the signed retirement, so compare the edge entries
   // are graded against.
   const windowOf = (d: string) => {

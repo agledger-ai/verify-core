@@ -57,7 +57,7 @@ describe('envelope extensions in the row payload are bound to the signed predica
     expect(result.brokenAt?.code).toBe('CHAIN_PAYLOAD_BINDING_MISMATCH');
   });
 
-  it('a row copy that is not an object is ignored, as the engine ignores it', () => {
+  it('a row copy that is not an object is ignored, as the Server ignores it', () => {
     const doc = load('export-lifecycle.json');
     const entry = (doc.entries as Entry[]).find((e) => e.payload && !e.payload['on_behalf_of']);
     if (!entry?.payload) throw new Error('fixture has no entry without on_behalf_of');
@@ -65,7 +65,7 @@ describe('envelope extensions in the row payload are bound to the signed predica
     expect(verifyAuditExport(doc).valid).toBe(true);
   });
 
-  it('a row without the block still verifies: the engine signs an on_behalf_of from authentication that never reaches the row', () => {
+  it('a row without the block still verifies: the Server signs an on_behalf_of from authentication that never reaches the row', () => {
     const doc = load('export-cert-lifecycle.json');
     delete firstWithObo(doc).payload['on_behalf_of'];
     expect(verifyAuditExport(doc).valid).toBe(true);
@@ -91,7 +91,7 @@ describe('envelope extensions in the row payload are bound to the signed predica
     expect(result.brokenAt?.code).toBe('CHAIN_PAYLOAD_BINDING_MISMATCH');
   });
 
-  it('a malformed traceparent the engine would have dropped does not break an entry that signed none', () => {
+  it('a malformed traceparent the Server would have dropped does not break an entry that signed none', () => {
     const doc = load('export-lifecycle.json');
     const entry = (doc.entries as Entry[]).find((e) => e.payload && !e.payload['traceparent']);
     if (!entry?.payload) throw new Error('fixture has no payload');

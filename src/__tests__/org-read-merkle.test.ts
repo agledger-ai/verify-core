@@ -10,7 +10,7 @@ import { orgReadLeafHash, orgReadMerkleRoot, verifyOrgReadInclusion } from '../p
  * denotes. The reference below is written from the RFC and the route's
  * published rule, with no reference to primitives.ts, so a shared mistake
  * cannot pass both halves. The corpus section checks the primitives against
- * leaves and signed tree heads the engine wrote.
+ * leaves and signed tree heads the Server wrote.
  */
 
 const sha256 = (...parts: Buffer[]): Buffer => createHash('sha256').update(Buffer.concat(parts)).digest();
@@ -137,7 +137,7 @@ function ndjson<T>(vector: string, file: string): T[] {
 interface Leaf { org_id: string; leaf_index: number; leaf_hash: string; cose_sign1: string }
 interface TreeHead { org_id: string; tree_size: number; root_hash: string }
 
-describe('org-read Merkle primitives against the engine corpus', () => {
+describe('org-read Merkle primitives against the Server corpus', () => {
   // Every pass vector that carries read-log leaves under a signed tree head.
   const vectors = ['valid', 'valid-unsigned-history-then-signed', 'valid-key-succession', 'valid-es256'];
 

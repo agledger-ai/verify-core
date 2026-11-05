@@ -91,7 +91,7 @@ function majorTypesIn(bytes: Uint8Array): Set<number> {
   return seen;
 }
 
-/** Every COSE_Sign1 envelope the conformance corpus carries, real engine output. */
+/** Every COSE_Sign1 envelope the conformance corpus carries, real Server output. */
 function corpusEnvelopes(): Uint8Array[] {
   const out: Uint8Array[] = [];
   for (const file of readdirSync(EXPORT_DIR)) {

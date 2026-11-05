@@ -19,7 +19,7 @@ import { decodeCoseSign1, extractActorClaim } from '../primitives.js';
  * verify with supplied keys and requireSuppliedKeys, which made the
  * guide's own advice unverifiable.
  *
- * Both fixtures are real engine output: the conformance corpus (admin actor)
+ * Both fixtures are real Server output: the conformance corpus (admin actor)
  * and a live 2.0.0 lifecycle export (agent actor).
  */
 
@@ -45,7 +45,7 @@ function clone<T>(value: T): T {
 }
 
 describe('actor-attribution cross-check', () => {
-  it('extracts the signed actor claim and it equals the row columns on real engine output', () => {
+  it('extracts the signed actor claim and it equals the row columns on real Server output', () => {
     for (const doc of [loadCorpus(), loadLive()]) {
       for (const entry of doc.entries) {
         const parts = decodeCoseSign1(Buffer.from(entry.integrity.coseSign1, 'base64'));

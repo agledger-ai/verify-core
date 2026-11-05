@@ -14,16 +14,16 @@ import type { AgentPublicKeyJwk } from '../primitives.js';
  * through verifyAuditExport, the same entrypoint the SDK /verify subpath, the
  * CLI, and the MCP server call. This is the anti-drift seam: a pass vector that
  * fails (or a fail vector that passes / returns the wrong canonical code) means
- * the engine wire format and the verifier have diverged, and the test fails
+ * the Server wire format and the verifier have diverged, and the test fails
  * loudly. The fixtures are REAL `/audit-export` output produced and owned by
- * agledger-api; regenerate (on a wire-format change) via agledger-api's
- * `pnpm generate:corpus`. They must mirror real output exactly, never a
+ * the Server; regenerate (on a wire-format change) with the Server's
+ * conformance generator. They must mirror real output exactly, never a
  * bilingual superset.
  */
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 // src/__tests__ -> repo root is two levels up (corpus vendored at repo root;
-// agledger-api owns generation, this repo pins the export-kind slice).
+// the Server owns generation, this repo pins the export-kind slice).
 const CONFORMANCE_DIR = join(HERE, '..', '..', 'testdata', 'conformance');
 const MANIFEST_PATH = join(CONFORMANCE_DIR, 'manifest-export.json');
 

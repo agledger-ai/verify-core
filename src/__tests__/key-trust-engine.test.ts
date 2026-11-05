@@ -17,18 +17,18 @@ import {
 } from './key-trust-fuzz.js';
 
 /**
- * The walk against the engine's own verdicts on the same random registries:
+ * The walk against the Server's own verdicts on the same random registries:
  * statements of every kind in any signer order, write times and signed
  * instants that tie, duplicated rows, later admissions of trusted keys, and
  * distrusted keys with and without a cutoff. The verdicts, and the key
- * document the engine publishes for each registry, were recorded from the
- * engine by scripts/record-key-trust-engine.mts, so this needs no API
+ * document the Server publishes for each registry, were recorded from the
+ * Server by scripts/record-key-trust-engine.mts, so this needs no API
  * checkout.
  */
 const recorded = JSON.parse(readFileSync(new URL('./fixtures/key-trust-engine.json', import.meta.url), 'utf8')) as {
-  engine: string;
+  Server: string;
   verdicts: Record<string, Verdict>;
-  /** The engine's walk over the document it publishes (`asDocument`), what it accounts for read as findings. */
+  /** The Server's walk over the document it publishes (`asDocument`), what it accounts for read as findings. */
   documents: Record<string, Verdict>;
   published: Record<string, PublishedFuzzKey[]>;
 };
@@ -37,7 +37,7 @@ const seeds = Object.keys(recorded.verdicts);
 /**
  * A verdict at the millisecond precision a dump's write times carry. A
  * retirement bound is capped at its closure's write time, which a dump gives
- * in milliseconds and the engine holds in microseconds; every entry and
+ * in milliseconds and the Server holds in microseconds; every entry and
  * statement is graded against it in milliseconds, so that is where the two
  * must agree.
  */
@@ -65,7 +65,7 @@ function walkDocument(sc: FuzzScenario, published: readonly PublishedFuzzKey[]):
   });
 }
 
-describe(`the trust walk against the engine (${recorded.engine})`, () => {
+describe(`the trust walk against the Server (${recorded.Server})`, () => {
   it('trusts the same keys, signs the same windows and finds the same statements on every recorded registry', () => {
     expect(seeds.length).toBeGreaterThanOrEqual(1000);
     const diverged: string[] = [];
@@ -74,13 +74,13 @@ describe(`the trust walk against the engine (${recorded.engine})`, () => {
       const got = atMilliseconds(portVerdict(computeKeyTrust(portInput(sc))));
       const want = atMilliseconds(recorded.verdicts[seed]!);
       // A closure dated after its write time within the same millisecond:
-      // the engine sees it in microseconds, a dump's write time cannot show it.
+      // the Server sees it in microseconds, a dump's write time cannot show it.
       const hidden = new Set(sc.statements.filter((st) => {
         const retiredAt = retiredAtOf(st);
         return retiredAt !== null && retiredAt > st.createdUs && retiredAt.slice(0, 23) === st.createdUs.slice(0, 23);
       }).map((st) => st.id));
       want.findings = want.findings.filter((f) => !(f.startsWith('KEY_CLOSURE_INVALID|') && hidden.has(f.split('|')[1]!) && !got.findings.includes(f)));
-      if (JSON.stringify(got) !== JSON.stringify(want)) diverged.push(`seed ${seed}: engine ${JSON.stringify(want)}, walk ${JSON.stringify(got)}`);
+      if (JSON.stringify(got) !== JSON.stringify(want)) diverged.push(`seed ${seed}: Server ${JSON.stringify(want)}, walk ${JSON.stringify(got)}`);
     }
     expect(diverged.slice(0, 5)).toEqual([]);
   }, 120_000);
@@ -92,24 +92,24 @@ describe(`the trust walk against the engine (${recorded.engine})`, () => {
       const shuffled = portInputAtMicroseconds(scenario(Number(seed)), (xs) => xs.map((x) => [r(), x] as const).sort((a, b) => a[0] - b[0]).map(([, x]) => x));
       const got = portVerdict(computeKeyTrust(shuffled));
       const want = recorded.verdicts[seed]!;
-      if (JSON.stringify(got) !== JSON.stringify(want)) diverged.push(`seed ${seed}: engine ${JSON.stringify(want)}, walk ${JSON.stringify(got)}`);
+      if (JSON.stringify(got) !== JSON.stringify(want)) diverged.push(`seed ${seed}: Server ${JSON.stringify(want)}, walk ${JSON.stringify(got)}`);
     }
     expect(diverged.slice(0, 5)).toEqual([]);
   }, 120_000);
 });
 
-describe(`a walk over the key document the engine publishes (${recorded.engine})`, () => {
-  it('trusts the same keys, signs the same windows and finds the same statements as the engine\'s own walk over that document', () => {
+describe(`a walk over the key document the Server publishes (${recorded.Server})`, () => {
+  it('trusts the same keys, signs the same windows and finds the same statements as the Server\'s own walk over that document', () => {
     const diverged: string[] = [];
     for (const seed of seeds) {
       const got = portVerdict(walkDocument(scenario(Number(seed)), recorded.published[seed]!));
       const want = recorded.documents[seed]!;
-      if (JSON.stringify(got) !== JSON.stringify(want)) diverged.push(`seed ${seed}: engine ${JSON.stringify(want)}, walk ${JSON.stringify(got)}`);
+      if (JSON.stringify(got) !== JSON.stringify(want)) diverged.push(`seed ${seed}: Server ${JSON.stringify(want)}, walk ${JSON.stringify(got)}`);
     }
     expect(diverged.slice(0, 5)).toEqual([]);
   }, 120_000);
 
-  it('never trusts a key the engine does not, and any window it grades more loosely on a listed key is a finding on that key', () => {
+  it('never trusts a key the Server does not, and any window it grades more loosely on a listed key is a finding on that key', () => {
     const wrong: string[] = [];
     for (const seed of seeds) {
       const sc = scenario(Number(seed));
@@ -122,23 +122,23 @@ describe(`a walk over the key document the engine publishes (${recorded.engine})
         .filter((f) => f.statementId === null && (f.code === 'CHAIN_KEY_WINDOW_DRIFT' || f.code === 'KEY_CLOSURE_INVALID'))
         .map((f) => f.keyId));
       for (const k of got.trusted) {
-        if (!want.trusted.includes(k)) wrong.push(`seed ${seed}: key ${k} trusted, the engine does not`);
+        if (!want.trusted.includes(k)) wrong.push(`seed ${seed}: key ${k} trusted, the Server does not`);
         else if (published.some((p) => p.key === k) && JSON.stringify(got.windows[k]) !== JSON.stringify(want.windows[k]) && !flagged.has(POOL[k]!.kid)) {
-          wrong.push(`seed ${seed}: key ${k} window ${JSON.stringify(got.windows[k])}, engine ${JSON.stringify(want.windows[k])}, no finding`);
+          wrong.push(`seed ${seed}: key ${k} window ${JSON.stringify(got.windows[k])}, Server ${JSON.stringify(want.windows[k])}, no finding`);
         }
       }
     }
     expect(wrong.slice(0, 5)).toEqual([]);
   }, 120_000);
 
-  it('agrees with the engine exactly when every statement verifies, every anchor is published and no key is distrusted', () => {
+  it('agrees with the Server exactly when every statement verifies, every anchor is published and no key is distrusted', () => {
     let agreed = 0;
     const wrong: string[] = [];
     for (const seed of seeds) {
       const sc = scenario(Number(seed));
       const published = recorded.published[seed]!;
       // A distrusted key's edges are void on a document walk whatever time
-      // the document gives, which can be narrower than the engine.
+      // the document gives, which can be narrower than the Server.
       if (sc.distrusted.length > 0 || !sc.anchors.every((a) => published.some((p) => p.key === a))) continue;
       const trust = walkDocument(sc, published);
       if (trust.statements.invalid > 0) continue;
@@ -168,7 +168,7 @@ describe(`a walk over the key document the engine publishes (${recorded.engine})
       const withFrom = documentOf(sc, published);
       const without = documentOf(sc, published.map(({ distrustedFrom: _d, ...k }) => k));
       const r = prng(Number(seed) ^ 0xd157);
-      // The engine's entries, none, and each moved to a random instant or none.
+      // The Server's entries, none, and each moved to a random instant or none.
       const shifted = sc.distrusted.map((d) => ({ spkiSha256: POOL[d.key]!.digest, cutoff: r() < 0.2 ? null : `2026-01-01T00:00:${String(Math.floor(r() * 60)).padStart(2, '0')}.${String(Math.floor(r() * 1e6)).padStart(6, '0')}Z` }));
       for (const distrustedKeys of [sc.distrusted.map((d) => ({ spkiSha256: POOL[d.key]!.digest, cutoff: d.cutoff })), [], shifted]) {
         const walk = (doc: VerificationKeysDocument) => computeKeyTrust({
@@ -189,7 +189,7 @@ describe(`a walk over the key document the engine publishes (${recorded.engine})
     expect(reworded).toBeGreaterThanOrEqual(100);
   }, 120_000);
 
-  it('needs the later admissions the engine publishes: with only each key\'s first, the walk dates windows differently', () => {
+  it('needs the later admissions the Server publishes: with only each key\'s first, the walk dates windows differently', () => {
     let moved = 0;
     for (const seed of seeds) {
       const sc = scenario(Number(seed));
