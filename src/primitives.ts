@@ -880,7 +880,7 @@ export function verifyAgentSignature(
  * Decode the predicate object from a COSE_Sign1 payload bstr. The payload IS
  * the in-toto v1 Statement; the predicate body lives at `payload.predicate`.
  * Returns null on any decode failure. Used by the binding-integrity check; the
- * row's denormalised `payload` jsonb is a convenience view projected from this
+ * entry's readable `payload` is a convenience view projected from this
  * predicate at write time; if the view was altered after signing,
  * `buildPredicateForRow(...) !== decodePredicate(...)`.
  */
