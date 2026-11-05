@@ -55,7 +55,8 @@ import {
   verifyCoseSign1,
   type AgentPublicKeyJwk,
 } from './primitives.js';
-import { checkFederationWire, extractFederationWire, type FederationKeyRegistry } from './federation-wire.js';
+import { canonicalizeJson, checkFederationWire, extractFederationWire, type FederationKeyRegistry } from './federation-wire.js';
+import { createHash } from 'node:crypto';
 import type { FailureCode } from './failures.js';
 import { instantMs, rfc3339Ms } from './instant.js';
 import { assertKnownOptions } from './options.js';
@@ -219,6 +220,13 @@ export interface NormalizedEntry {
     actorRole: string | null;
     actorOwnerId: string | null;
   };
+  /**
+   * The evidence body an `?evidence=true` export inlines at the entry's
+   * `evidence` (export path). Present on the entry, however it is spelled, →
+   * the evidence-binding check runs: the body is an unsigned projection, and
+   * its authority comes only from hashing to the hash the entry signs.
+   */
+  inlinedEvidence?: { value: unknown };
 }
 
 /**
@@ -234,7 +242,8 @@ export type OptionalCheck =
   | 'key_temporal'
   | 'agent_signature'
   | 'key_anchoring'
-  | 'federation_wire';
+  | 'federation_wire'
+  | 'evidence_binding';
 /**
  * `applied`: the check ran. `skipped_no_input`: the input it needs is absent.
  * `not_checked`: the input was given but no entry reached the check, because
@@ -367,11 +376,31 @@ export interface ChainResult {
    * signature under the key given for the hub). `present - verified - failed`
    * is the messages from a hub with no key supplied. `afterRetirement`
    * counts verified ones sealed under a key the sender's history retired
-   * before the receiver wrote the entry (see `FederationWireOutcome`): in
+   * before the sender signed the message (see `FederationWireOutcome`): in
    * order when the receiver revoked the peer after them, so check its
    * `federation.peer_revoked` audit row.
    */
   federationWire: { present: number; verified: number; failed: number; afterRetirement: number };
+  /**
+   * Evidence bodies an `?evidence=true` export inlines (`entries[].evidence`
+   * on COMPLETION_SUBMITTED and DISPUTE_EVIDENCE). `present` counts entries
+   * that passed every other check and carry one; `verified` those whose body
+   * hashes, under RFC 8785 and SHA-256, to the signed `payload.evidenceHash`
+   * or `payload.payloadHash`; `clientHashed` those on an encrypted-mode
+   * completion (`payload.verifiedBy: "client"`), whose signed hash covers a
+   * cleartext the export does not carry, so the inlined ciphertext cannot be
+   * re-bound offline; `failed` those that did not hash to it, or sit where
+   * nothing signed binds a body. Always zero on a dump, which carries none.
+   */
+  evidenceBinding: EvidenceBindingCounts;
+}
+
+/** See {@link ChainResult.evidenceBinding}. */
+export interface EvidenceBindingCounts {
+  present: number;
+  verified: number;
+  clientHashed: number;
+  failed: number;
 }
 
 export interface VerifyChainOptions {
@@ -511,10 +540,12 @@ export function verifyChain(
     agent_signature: 'skipped_no_input',
     key_anchoring: 'skipped_no_input',
     federation_wire: 'skipped_no_input',
+    evidence_binding: 'skipped_no_input',
   };
   const keyProvenance = { supplied: 0, embedded: 0 };
   const agentSignatures = { present: 0, verified: 0 };
   const federationWire = { present: 0, verified: 0, failed: 0, afterRetirement: 0 };
+  const evidenceBinding: EvidenceBindingCounts = { present: 0, verified: 0, clientHashed: 0, failed: 0 };
   let verifiedEntries = 0;
   let brokenAt: ChainResult['brokenAt'];
   const accounted: AccountedEntry[] = [];
@@ -533,6 +564,7 @@ export function verifyChain(
       keyProvenance,
       agentSignatures,
       federationWire,
+      evidenceBinding,
     };
   }
 
@@ -568,6 +600,9 @@ export function verifyChain(
     }
     if (result.valid && result.accounted === undefined && entry.binding !== undefined) {
       result = checkSealedFederationWire(entry, result, options.federationKeys, optionalChecks, federationWire);
+    }
+    if (result.valid && result.accounted === undefined && entry.inlinedEvidence !== undefined) {
+      result = checkInlinedEvidence(entry, result, optionalChecks, evidenceBinding);
     }
     entryResults.push(result);
 
@@ -624,7 +659,63 @@ export function verifyChain(
     keyProvenance,
     agentSignatures,
     federationWire,
+    evidenceBinding,
   };
+}
+
+/** The payload field each entry type signs an inlined evidence body's hash under. */
+const EVIDENCE_HASH_FIELD: Readonly<Record<string, string>> = {
+  COMPLETION_SUBMITTED: 'evidenceHash',
+  DISPUTE_EVIDENCE: 'payloadHash',
+};
+
+/**
+ * Re-bind an inlined evidence body to the hash its entry signs, on an entry
+ * that already passed every other check (so `binding.payload` is what the
+ * Server signed): SHA-256 hex over the RFC 8785 form of the body, the
+ * Server's `hashPayload`, against `payload.evidenceHash` (completion) or
+ * `payload.payloadHash` (dispute evidence). An encrypted-mode completion
+ * signs a hash its submitter computed over the cleartext, and the export
+ * inlines the ciphertext, so it is counted and left unbound.
+ */
+function checkInlinedEvidence(
+  entry: NormalizedEntry,
+  result: ChainEntryResult,
+  optionalChecks: Record<OptionalCheck, CheckApplicability>,
+  counts: EvidenceBindingCounts,
+): ChainEntryResult {
+  optionalChecks.evidence_binding = 'applied';
+  counts.present++;
+  const failed = (detail: string): ChainEntryResult => {
+    counts.failed++;
+    return fail(entry.scopeId, result.position, 'CHAIN_EVIDENCE_BINDING_MISMATCH', detail, result.signature);
+  };
+  const body = entry.inlinedEvidence!.value;
+  if (entry.binding === undefined) {
+    return failed('The entry inlines an evidence body but carries no payload, so no signed hash binds the body to the chain.');
+  }
+  const { entryType, payload } = entry.binding;
+  const field = EVIDENCE_HASH_FIELD[entryType];
+  if (field === undefined) {
+    return failed(`A ${entryType} entry inlines an evidence body. The Server inlines evidence only on COMPLETION_SUBMITTED and DISPUTE_EVIDENCE entries, and nothing this entry signs binds a body.`);
+  }
+  if (body === null || typeof body !== 'object' || Array.isArray(body)) {
+    return failed(`The inlined evidence is ${body === null ? 'null' : Array.isArray(body) ? 'an array' : typeof body}, not the JSON object the entry's payload.${field} was computed over.`);
+  }
+  const signed = payload[field];
+  if (typeof signed !== 'string' || !/^[0-9a-f]{64}$/i.test(signed)) {
+    return failed(`The entry inlines an evidence body but signs no payload.${field} to bind it to.`);
+  }
+  if (entryType === 'COMPLETION_SUBMITTED' && payload.verifiedBy === 'client') {
+    counts.clientHashed++;
+    return result;
+  }
+  const digest = createHash('sha256').update(canonicalizeJson(body), 'utf8').digest('hex');
+  if (digest !== signed.toLowerCase()) {
+    return failed(`The inlined evidence body hashes to ${digest} under RFC 8785 and SHA-256, and the entry signs payload.${field} ${signed.toLowerCase()}: the body was edited after export, or is not the one submitted.`);
+  }
+  counts.verified++;
+  return result;
 }
 
 /**
@@ -654,7 +745,7 @@ function checkSealedFederationWire(
     );
   }
   counts.present++;
-  const outcome = checkFederationWire(entry.binding.entryType, entry.binding.recordId, entry.binding.payload, wire, federationKeys, entry.createdAt);
+  const outcome = checkFederationWire(entry.binding.entryType, entry.binding.recordId, entry.binding.payload, wire, federationKeys);
   if (outcome.outcome === 'ok') {
     if (outcome.signatureChecked) counts.verified++;
     if (outcome.afterRetirement) counts.afterRetirement++;

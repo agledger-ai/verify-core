@@ -101,8 +101,11 @@ export type FederationKeyRegistry = ReadonlyMap<string, ReadonlyArray<Federation
  * `signingPublicKey` your peer row holds, or one its operator confirmed);
  * with `history`, the publisher's key-history document, every earlier or later
  * key a chain of successions links to it is trusted too, inside its window. A
- * hub may be named more than once, to pin keys no succession links (a key
- * listed `linked: false`).
+ * hub may be named more than once, to pin keys no succession links: a key
+ * listed `linked: false`, or a key the history does not list at all (one in
+ * use before a change made with neither predecessor setting), which is then
+ * trusted on its own at any time. At least one pin for a hub with a history
+ * must be a key that history lists.
  */
 export interface FederationKeyEntry {
   hubId: string;
@@ -271,11 +274,23 @@ function trustedKeysFromHistory(
     if (!retiredAt.has(a)) retiredAt.set(a, st.predecessor.retiredAt);
   }
 
+  // A pin the histories list roots a walk through its successions. A pin they
+  // do not list (a key from before a change made with neither predecessor
+  // setting, which no history names) is trusted on its own, at any time, as a
+  // pin is without a history. At least one pin must be listed, or nothing
+  // links the histories to a key you hold.
+  const listed = pins.filter((p) => publicKeyOf.has(spkiSha256(p.spki)));
+  if (listed.length === 0) {
+    const named = pins.map((p) => `${p.label} (${spkiSha256(p.spki).slice(0, 16)})`).join(', ');
+    throw new TypeError(`${histories.map((h) => h.label).join(', ')}: no key pinned for hub ${hubId} appears in the key history given for it (${named}), so the history is not linked to anything you hold. Pin a key the history lists: its current key, or one you held before the change.`);
+  }
   const trusted = new Set<string>();
-  for (const { spki, label } of pins) {
+  const standalone = new Set<string>();
+  for (const { spki } of pins) {
     const digest = spkiSha256(spki);
     if (!publicKeyOf.has(digest)) {
-      throw new TypeError(`${label}: the key pinned for hub ${hubId} appears in none of the key histories given for it, so the history is not linked to anything you hold.`);
+      standalone.add(spki);
+      continue;
     }
     const queue = [digest];
     while (queue.length > 0) {
@@ -285,19 +300,22 @@ function trustedKeysFromHistory(
       queue.push(...(links.get(k) ?? []));
     }
   }
-  return [...trusted].map((digest) => ({
-    publicKey: publicKeyOf.get(digest)!,
-    activatedAt: admission.get(digest)?.subject.activatedAt ?? null,
-    retiredAt: retiredAt.get(digest) ?? null,
-  }));
+  return [
+    ...[...trusted].map((digest) => ({
+      publicKey: publicKeyOf.get(digest)!,
+      activatedAt: admission.get(digest)?.subject.activatedAt ?? null,
+      retiredAt: retiredAt.get(digest) ?? null,
+    })),
+    ...[...standalone].map((publicKey) => ({ publicKey, activatedAt: null, retiredAt: null })),
+  ];
 }
 
 /**
  * Build the registry from `{ [hubId]: publicKey }` or
  * `[{ hubId, publicKey, history? }]`. Throws `TypeError` naming the entry on
  * any key that is not an Ed25519 key in one of the two forms, and on a history
- * that is another hub's, carries a statement that does not verify, or does not
- * reach the pinned key, so a bad input is refused before any verification
+ * that is another hub's, carries a statement that does not verify, or lists
+ * none of the keys pinned for its hub, so a bad input is refused before any verification
  * runs rather than reported as a signature failure.
  */
 export function buildFederationKeyRegistry(
@@ -393,7 +411,7 @@ export type FederationWireOutcome =
   /**
    * The hash, the entry's fields and, under a supplied key, the signature all
    * hold. `afterRetirement`: the key the message is sealed under was retired,
-   * by a succession it signed, before the receiver wrote the entry. The
+   * by a succession it signed, before the sender signed the message. The
    * receiver accepts the old key until it revokes the peer, so a publisher
    * process not yet restarted onto the new key sends exactly this; it is in
    * order when the receiver's `federation.peer_revoked` audit row for the
@@ -433,9 +451,12 @@ const FIELD_PAIRS: Readonly<Record<string, ReadonlyArray<readonly [string, strin
  *
  * Runs on an entry that already passed every other check, so `payload` is
  * what the receiver signed. `recordId` is the entry's record; the body names
- * the same record on every message type that carries one. `receivedAt` is the
- * entry's `createdAt` on the receiver's chain, which places the message in a
- * key's window when the sender's keys came with a history.
+ * the same record on every message type that carries one. When the sender's
+ * keys came with a history, the message is placed in a key's window by
+ * `wire.timestamp`: the sender signed it, the receiver sealed it under its own
+ * signature after holding it to its clock-skew allowance, and it is read from
+ * the sender's clock, the clock the history's windows are written by. The
+ * entry's `createdAt` is a column no signature covers, so it places nothing.
  */
 export function checkFederationWire(
   entryType: string,
@@ -443,7 +464,6 @@ export function checkFederationWire(
   payload: Record<string, unknown>,
   wire: FederationWire,
   keys: FederationKeyRegistry | undefined,
-  receivedAt?: string | null,
 ): FederationWireOutcome {
   if (wire.scheme !== FEDERATION_WIRE_SCHEME) {
     return { outcome: 'invalid', detail: `Sealed message scheme is ${JSON.stringify(wire.scheme)}, not ${FEDERATION_WIRE_SCHEME}.` };
@@ -486,14 +506,14 @@ export function checkFederationWire(
   }
   let afterRetirement = false;
   if (key.activatedAt !== null || key.retiredAt !== null) {
-    const at = typeof receivedAt === 'string' ? rfc3339Ms(receivedAt) : Number.NaN;
+    const at = rfc3339Ms(wire.timestamp);
     if (Number.isNaN(at)) {
-      return { outcome: 'invalid', detail: `Entry has no parseable createdAt, so the sealed message from ${wire.senderHubId} cannot be placed in its key's window.` };
+      return { outcome: 'invalid', detail: `Sealed message from ${wire.senderHubId} carries timestamp ${JSON.stringify(wire.timestamp)}, which is not an RFC 3339 instant, so it cannot be placed in its key's window.` };
     }
     if (key.activatedAt !== null && at < rfc3339Ms(key.activatedAt)) {
       return {
         outcome: 'invalid',
-        detail: `Entry written ${receivedAt} seals a message from ${wire.senderHubId} under a federation key its history activates at ${key.activatedAt}, after the receiver says it took the message.`,
+        detail: `Sealed message from ${wire.senderHubId} is signed at ${wire.timestamp} under a federation key its history activates at ${key.activatedAt}, after the sender signed it.`,
       };
     }
     afterRetirement = key.retiredAt !== null && at > rfc3339Ms(key.retiredAt);

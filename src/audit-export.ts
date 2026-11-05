@@ -25,6 +25,7 @@ import {
   earliestKeyActivation,
   verifyChain,
   type CheckApplicability,
+  type EvidenceBindingCounts,
   type NormalizedEntry,
   type OptionalCheck,
   type SignatureOutcome,
@@ -86,6 +87,13 @@ export interface AuditExportEntryInput {
   entryType?: string;
   /** Denormalized row `payload` jsonb. Present → the binding-integrity check runs (verificationGuide step 4). */
   payload?: Record<string, unknown>;
+  /**
+   * The evidence body `?evidence=true` inlines: the completion evidence on a
+   * COMPLETION_SUBMITTED entry, the filed payload on a DISPUTE_EVIDENCE entry.
+   * Unsigned. Present → the evidence-binding check re-hashes it against the
+   * signed `payload.evidenceHash` / `payload.payloadHash`.
+   */
+  evidence?: Record<string, unknown>;
   integrity: {
     payloadHash: string;
     previousHash: string | null;
@@ -245,9 +253,11 @@ export interface VerifyExportOptions {
    * seal the earlier key. Give the list form an entry's `history`, the
    * sender's `GET /.well-known/agledger-federation-keys.json`, beside the key
    * you pinned: every key the history links to the pin through successions
-   * both keys signed is trusted inside its window, placed by the entry's
-   * `createdAt`. A history that is another hub's, carries a statement that
-   * does not verify, or never reaches the pin throws `TypeError`.
+   * both keys signed is trusted inside its window, placed by the message's
+   * signed `wire.timestamp`. A second entry for the hub may pin a key the
+   * history does not list, trusted on its own. A history that is another
+   * hub's, carries a statement that does not verify, or lists none of the
+   * hub's pins throws `TypeError`.
    */
   federationKeys?: Readonly<Record<string, string>> | ReadonlyArray<FederationKeyEntry>;
 }
@@ -319,9 +329,17 @@ export interface VerifyExportResult {
    * to its body hash and to its entry; `failed` counts those that failed a
    * check, and `present - verified - failed` is the ones from a hub with no
    * key supplied. `afterRetirement` counts verified ones sealed under a key
-   * the sender's history retired before the entry was written.
+   * the sender's history retired before the sender signed the message.
    */
   federationWire: { present: number; verified: number; failed: number; afterRetirement: number };
+  /**
+   * Inlined evidence bodies (`?evidence=true`) vs re-bound to the hash their
+   * entry signs. A body that does not hash to it fails
+   * CHAIN_EVIDENCE_BINDING_MISMATCH; `clientHashed` counts encrypted-mode
+   * completions, whose signed hash covers a cleartext the export does not
+   * carry. See `ChainResult.evidenceBinding`.
+   */
+  evidenceBinding: EvidenceBindingCounts;
   /**
    * `trusted`, `unanchored` or `failed` (see `Verdict`). Read this rather
    * than `valid` alone: a valid result with no `trustAnchors`, or none that
@@ -443,6 +461,10 @@ export function verifyAuditExport(
         payload: e.payload,
       };
     }
+    // An inlined evidence body is unsigned; it is re-bound to the hash the
+    // entry signs, so a null or a non-object there fails rather than reading
+    // as no body at all.
+    if (e.evidence !== undefined && e.evidence !== null) base.inlinedEvidence = { value: e.evidence };
     // Actor attribution: the export's own guide tells an auditor that
     // `actorId`/`actorOwnerId` ARE the trustworthy attribution (only
     // actorDisplayName / actorOwnerType / humanReadableLabel are listed as
@@ -512,6 +534,7 @@ export function verifyAuditExport(
     unsignedProjectionFields: exportData.verificationGuide?.unsignedFields ?? [],
     agentSignatures: chain.agentSignatures,
     federationWire: chain.federationWire,
+    evidenceBinding: chain.evidenceBinding,
     keyTrust,
     verdict: verdictOf({ valid, keyTrust }),
   };
@@ -597,11 +620,13 @@ function earlyFailure(recordId: string, totalEntries: number, detail: string): V
       agent_signature: 'skipped_no_input',
       key_anchoring: 'skipped_no_input',
       federation_wire: 'skipped_no_input',
+      evidence_binding: 'skipped_no_input',
     },
     keyProvenance: { supplied: 0, embedded: 0 },
     unsignedProjectionFields: [],
     agentSignatures: { present: 0, verified: 0 },
     federationWire: { present: 0, verified: 0, failed: 0, afterRetirement: 0 },
+    evidenceBinding: { present: 0, verified: 0, clientHashed: 0, failed: 0 },
     keyTrust: reportKeyTrust(new Map(), null, null),
     verdict: 'failed',
   };
