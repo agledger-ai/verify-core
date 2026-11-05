@@ -85,7 +85,7 @@ export interface AuditExportEntryInput {
   recordId?: string | null;
   /** The audit-vault entry type (e.g. `RECORD_CREATED`); drives the binding check's predicate reconstruction. */
   entryType?: string;
-  /** Denormalized row `payload` jsonb. Present → the binding-integrity check runs (verificationGuide step 4). */
+  /** The entry's readable `payload`, a projection of the signed predicate. Present → the binding-integrity check runs (verificationGuide step 4). */
   payload?: Record<string, unknown>;
   /**
    * The evidence body `?evidence=true` inlines: the completion evidence on a
