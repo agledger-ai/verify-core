@@ -4,12 +4,11 @@
  * A vault key is trusted only when signed key statements link it to a key the
  * verifier pinned out of band (`trustAnchors`). The Server's database stores
  * the statements and never vouches for them: anything with write access to it
- * can add a `vault_signing_keys` row and a statement row, and neither makes a
+ * can add a key row and a statement row, and neither makes a
  * key trusted, because every edge below is a signature that writer cannot
- * produce. This is the engine's `computeKeyTrust`
- * (audit-vault/key-statements.ts), re-implemented so the verifier has no engine
- * dependency. Where the two could disagree, this one must never trust a key the
- * engine refuses.
+ * produce. This is the same walk the Server runs over its own
+ * key registry, re-implemented so the verifier has no Server dependency. Where the two could disagree, this one must never trust a key the
+ * Server refuses.
  *
  * **Format.** Each statement is one or two COSE_Sign1 (RFC 9052, tag 18) over
  * the SAME deterministic-CBOR (RFC 8949 §4.2.1) payload, protected header
@@ -37,11 +36,11 @@
  * statement's `id` and `createdAt` at microseconds, and lists under a trusted
  * key its admission, every later genesis or succession it signed, and its
  * counting closures. A walk over a document therefore dates a window and
- * cuts an edge back as the engine does, except where the document does not
- * carry a key the engine verified a statement with (the endorser of a later
+ * cuts an edge back as the Server does, except where the document does not
+ * carry a key the Server verified a statement with (the endorser of a later
  * succession, the signer of a closure): that statement is
  * KEY_STATEMENT_INVALID or KEY_CLOSURE_INVALID here, the window is wider than
- * the engine's, and the listed `activatedAt` or `retiredAt` reports it as
+ * the Server's, and the listed `activatedAt` or `retiredAt` reports it as
  * CHAIN_KEY_WINDOW_DRIFT (a listed retirement no counting closure signs, as
  * KEY_CLOSURE_INVALID).
  *
@@ -76,7 +75,7 @@ export type KeyStatementKind = (typeof KEY_STATEMENT_KINDS)[number];
 
 /**
  * The COSE `alg` a statement signature must carry for its key's algorithm.
- * Exactly one per algorithm, as the engine signs and checks them; the chain
+ * Exactly one per algorithm, as the Server signs and checks them; the chain
  * envelope's wider acceptance (RFC 9864 fully-specified code points) does not
  * apply to statements.
  */
@@ -107,7 +106,7 @@ export interface KeyStatementInput {
   /**
    * Row id (the dump's or a key document's `id`), named in findings. Under the
    * write order it breaks a tie between two statements whose `createdAt` are
-   * the same microsecond, as the engine's `created_at, id` does.
+   * the same microsecond, as the Server's `created_at, id` does.
    */
   id?: string | null;
   /** The source's own `kind` column, bound to the signed `typ`. */
@@ -124,7 +123,7 @@ export interface KeyStatementInput {
    * Where the statement was read from. `dump`: a row of a dump's
    * `vault_key_statements.ndjson` ({@link keyStatementFromDumpRow} sets it),
    * whose `created_at` the walk holds a distrusted key's statements to, as the
-   * engine does. Anything else, absent included, is a key document's (an
+   * Server does. Anything else, absent included, is a key document's (an
    * export's or a supplied `/v1/verification-keys` entry's): its `createdAt`
    * orders it but never keeps an edge out of a distrusted key.
    */
@@ -222,7 +221,7 @@ export interface KeyRegistryFinding {
  * Something the walk did that is not a finding and does not fail a verdict:
  * a statement from a key document signed by a distrusted key that admits
  * nothing here, because the document's write time is the holder's word and is
- * never held against the key's cutoff, though the engine, holding it to the
+ * never held against the key's cutoff, though the Server, holding it to the
  * time it was stored, counts it. It still dates windows and cuts edges back.
  * Also a listed key whose `distrustedFrom` differs from the instant the
  * caller's `distrustedKeys` entry gives it, where no finding on its window
@@ -300,7 +299,7 @@ export interface KeyTrust {
 }
 
 /**
- * What a `distrustedKeys` entry covers for one key, as the engine's
+ * What a `distrustedKeys` entry covers for one key, as the Server's
  * `distrustSpans` gives it. `cutoff`: the instant from which what the key
  * signs counts for nothing (the entry's own, else `retiredAt`; null: trusted
  * for nothing). `retiredAt`: the earliest retirement of the key that a key
@@ -393,7 +392,7 @@ export function parseDistrustedKeys(raw: string | readonly string[]): Distrusted
  * (`sha256:<hex>@<instant>`) is how a leaked key whose history is still
  * needed is kept from signing anything new: the pin vouches for what it
  * stored before the instant. `computeKeyTrust` itself walks any pair as the
- * engine's walk does; a verifier calls this on what its caller passed before
+ * Server's walk does; a verifier calls this on what its caller passed before
  * it walks.
  */
 export function assertNotPinnedAndDistrusted(
@@ -810,7 +809,7 @@ export function computeKeyTrust(input: ComputeKeyTrustInput): KeyTrust {
   // One stored row, read from two sources (an export and a key document), is
   // one statement. With no write time and no row id, two identical
   // statements are one; with them, a row is its id and write time, and a copy
-  // of a row under another id is a second row, as the engine reads it.
+  // of a row under another id is a second row, as the Server reads it.
   const seen = new Set<string>();
   const statementInputs = input.statements.filter((s) => {
     const cose: readonly unknown[] = Array.isArray(s.cose) ? s.cose : [];
@@ -855,7 +854,7 @@ export function computeKeyTrust(input: ComputeKeyTrustInput): KeyTrust {
     return { ...c, verdict: 'invalid' as const, detail: 'the row has no parseable created_at to order it by' };
   });
   // Under the write order: `createdAt` at the precision given, then `id` for
-  // two stored in the same microsecond (the engine's `created_at, id`), then
+  // two stored in the same microsecond (the Server's `created_at, id`), then
   // input order, which a dump writes as `created_at, id` at the microseconds
   // its milliseconds hide.
   type Placed = { c: CheckedKeyStatement; i: number; k: number | string; micro: boolean; r: number };
@@ -885,7 +884,7 @@ export function computeKeyTrust(input: ComputeKeyTrustInput): KeyTrust {
   // A dump row whose signed payload an earlier row already carries says
   // nothing new: a copy of a row (anything with write access to the database
   // can write one), or the same payload signed again. Only the first, in
-  // write order, takes part, as the engine reads it; the database stamps the
+  // write order, takes part, as the Server reads it; the database stamps the
   // write time, so a copy always lands after what it copies. A key document's
   // write time is its holder's word, so there a copy dated earlier would push
   // the published statement aside: on a document a copy stays a second
@@ -979,7 +978,7 @@ export function computeKeyTrust(input: ComputeKeyTrustInput): KeyTrust {
    * is not a dump row, every edge out of a distrusted key is void whatever
    * time it carries, and every closure it signed still counts: dropping an
    * edge or keeping a closure only ever takes trust away. Narrower than the
-   * engine, never wider. The write order still orders such statements.
+   * Server, never wider. The write order still orders such statements.
    */
   const distrusted = (s: Statement, signer: string | null): boolean => {
     if (signer === null || !cutoffs.has(signer)) return false;
@@ -989,7 +988,7 @@ export function computeKeyTrust(input: ComputeKeyTrustInput): KeyTrust {
   };
 
   /**
-   * What the engine would void: signed by a distrusted key with no cutoff, or
+   * What the Server would void: signed by a distrusted key with no cutoff, or
    * stored at or after its cutoff. On a key document the stored time is the
    * holder's word, so this decides only whether voiding it is a finding.
    */
@@ -1030,7 +1029,7 @@ export function computeKeyTrust(input: ComputeKeyTrustInput): KeyTrust {
   // key, a forced closure's cut-off keys included, a key cut off from a
   // leaked one could retire a distrusted key it also holds and have what that
   // key forged read as accounted for. Only a signer the walk trusts and
-  // reaches without a distrusted key bounds it, as in the engine; the cutoff
+  // reaches without a distrusted key bounds it, as in the Server; the cutoff
   // a bound gives an undated entry comes from the reach alone.
   const clearOfDistrust = reach(anchors, edges.filter((e) => !distrust.has(e.from)));
   for (const [d, span] of distrustSpans) {
@@ -1136,7 +1135,7 @@ export function computeKeyTrust(input: ComputeKeyTrustInput): KeyTrust {
     if (voided && voidedByStoredTime(s, e) && s.payload.typ !== 'closure' && trusted.has(s.subject) && admissions.get(s.subject) === s) continue;
     if (voided && !voidedByStoredTime(s, e)) {
       // Voided only because a key document's time is not held against the
-      // cutoff: it admits nothing, but a statement the engine would count is
+      // cutoff: it admits nothing, but a statement the Server would count is
       // no finding. It still dates windows and cuts edges back, so it can
       // only narrow trust. The checks below still apply to it.
       const cutoff = cutoffs.get(e)!;
@@ -1164,7 +1163,7 @@ export function computeKeyTrust(input: ComputeKeyTrustInput): KeyTrust {
         const retiredBy = distrustSpans.get(e)?.retiredAt ?? null;
         // A later admission of a trusted key that the key itself signed is
         // the record of its own half leaking, whoever co-signed it: never
-        // accounted for, as in the engine.
+        // accounted for, as in the Server.
         const leakedSubject = s.payload.typ !== 'closure' && admissions.get(s.subject) !== s && s.check.subjectSigned && trusted.has(s.subject);
         if (leakedSubject) {
           finding(code, s, `${what} It is also a ${s.payload.typ} ${s.payload.subject.kid} signed after it was already admitted: ${s.payload.subject.kid}'s private half in other hands, which no distrust entry for ${by} accounts for. Move every Server process off ${s.payload.subject.kid}, retire it with force from the key they hold, and give distrustedKeys sha256:${s.subject}@<the instant it leaked> (VAULT_DISTRUSTED_KEYS on every Server process).`);
@@ -1266,7 +1265,7 @@ export function computeKeyTrust(input: ComputeKeyTrustInput): KeyTrust {
 
   // Keys an admission names that this walk could not verify. A key document
   // carries a key's admissions but not every endorser, so the walk can date a
-  // trusted key's window earlier than the engine did, or not at all.
+  // trusted key's window earlier than the Server did, or not at all.
   const unverifiedAdmission = new Set(checked
     .filter((c) => c.verdict === 'invalid' && c.payload !== null && c.payload.typ !== 'closure')
     .map((c) => c.payload!.subject.spkiSha256));
@@ -1532,7 +1531,7 @@ export function keyStatementsFromVerificationKeys(doc: VerificationKeysDocument)
 /**
  * Mark every key of a registry with the walk's verdict, and give each anchored
  * key the window its statements sign in place of whatever window it carried,
- * as the engine grades entries. An anchored key no statement dates carries no
+ * as the Server grades entries. An anchored key no statement dates carries no
  * edge on that side. A key is anchored only when its key id is the
  * fingerprint of its own SPKI: a row filed under another key's id names that
  * key's entries, and is anchored to nothing. On a walk over a dump, a key a

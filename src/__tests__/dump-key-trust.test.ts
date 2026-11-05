@@ -15,8 +15,8 @@ import {
 import type { FailureCode } from '../failures.js';
 
 /**
- * The key-statement walk against the engine's own dump vectors: real
- * statements, signed by the engine and stored by its database. The full dump
+ * The key-statement walk against the Server's own dump vectors: real
+ * statements, signed by the Server and stored by its database. The full dump
  * verdict is @agledger/verify's to give; this runs the part verify-core owns,
  * the walk and the per-entry anchoring and window checks it drives, and holds
  * every vector that pins `trustAnchors` to its expected verdict.
@@ -129,7 +129,7 @@ describe('key-statement walk over the dump corpus: vectors that pin trustAnchors
 });
 
 describe('key-statement walk over the dump corpus: pass vectors pinned on the Server\'s current key', () => {
-  // Every pass vector whose registry columns are the engine's own, the
+  // Every pass vector whose registry columns are the Server's own, the
   // rotation boundary included: it re-signs the window it tests.
   const vectors = ['dump/valid', 'dump/valid-es256', 'dump/valid-identity', 'dump/valid-unsigned-history-then-signed', 'dump/valid-rotation-boundary'];
 
@@ -153,7 +153,7 @@ describe('key-statement walk over the dump corpus: pass vectors pinned on the Se
     expect(gradeDump(dir, [`sha256:${spkiSha256(first.public_key)}`]).codes).toContain('CHAIN_SIGNING_KEY_UNANCHORED');
   });
 
-  it.each(vectors)('%s verifies clean with every row of vault_key_statements copied under a new id and write time, as the engine reads such a copy', (dir) => {
+  it.each(vectors)('%s verifies clean with every row of vault_key_statements copied under a new id and write time, as the Server reads such a copy', (dir) => {
     // What anything with the runtime role can do to the append-only table:
     // INSERT ... SELECT subject_key_id, endorser_key_id, kind, statement.
     const copied = (rows: DumpKeyStatementRow[]) => [

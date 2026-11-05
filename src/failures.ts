@@ -41,43 +41,43 @@
  *                                verdict, never a silent pass.
  *
  * Later additions:
- *   - CHAIN_ENTRY_UNSIGNED     engine mirror of `signature_missing`: an entry with
+ *   - CHAIN_ENTRY_UNSIGNED     Server mirror of `signature_missing`: an entry with
  *                                no signing key id after a signed entry in its
  *                                chain, or written at or after the earliest
  *                                activatedAt in the key set. Earlier unsigned
  *                                entries stay reduced coverage.
- *   - CHECKPOINT_UNSIGNED      engine mirror of `checkpoint_unsigned`: the same
+ *   - CHECKPOINT_UNSIGNED      Server mirror of `checkpoint_unsigned`: the same
  *                                instant, applied to an unsigned checkpoint.
  *   - TENANT_READ_LEAF_UNSIGNED and TENANT_CHECKPOINT_UNSIGNED  the same two
- *                                rules on the org_admin_reads log (engine
+ *                                rules on the org_admin_reads log (Server
  *                                `leaf_signature_missing`, `checkpoint_unsigned`).
- *   - CHAIN_SIGNING_KEY_UNANCHORED  engine mirror of `signing_key_unanchored`:
+ *   - CHAIN_SIGNING_KEY_UNANCHORED  Server mirror of `signing_key_unanchored`:
  *                                the entry's key is not linked by signed key
  *                                statements to a pinned trust anchor. With
  *                                CHECKPOINT_KEY_UNANCHORED,
  *                                TENANT_READ_KEY_UNANCHORED and
  *                                TENANT_CHECKPOINT_KEY_UNANCHORED for the
- *                                engine's `checkpoint_key_unanchored` and
+ *                                Server's `checkpoint_key_unanchored` and
  *                                `leaf_key_unanchored`.
  *   - KEY_STATEMENT_INVALID, KEY_CLOSURE_INVALID, CHAIN_KEY_WINDOW_DRIFT
- *                                engine mirrors of the key registry findings
+ *                                Server mirrors of the key registry findings
  *                                `key_statement_invalid`, `key_closure_invalid`
  *                                and `key_window_drift`. They are about the
  *                                registry, not about any one entry.
  *   - CHECKPOINT_CLAIM_MISMATCH, TENANT_READ_CLAIM_MISMATCH,
- *     TENANT_CHECKPOINT_CLAIM_MISMATCH  engine mirrors of the vault's
+ *     TENANT_CHECKPOINT_CLAIM_MISMATCH  Server mirrors of the vault's
  *                                `checkpoint_claim_mismatch` and the read log's
  *                                `leaf_claim_mismatch` and
  *                                `checkpoint_claim_mismatch`: the claim signed
  *                                inside the envelope does not decode, or says
  *                                something the row's columns do not.
  *
- * Server-side cert re-checks are not mirrored here. The engine's chain
+ * Server-side cert re-checks are not mirrored here. The Server's chain
  * verification also reports `cert_missing`, `cert_actor_drift`,
  * `cert_window_drift`, `cert_expired` and `agent_signature_invalid`, by
  * comparing what an entry sealed in `predicate.on_behalf_of.cert` against the
- * live `ephemeral_certs` row. Neither the export nor the dump carries that
- * table, so an offline verifier cannot reproduce those comparisons, and it
+ * Server's cert record. Neither the export nor the dump carries that
+ * record, so an offline verifier cannot reproduce those comparisons, and it
  * does not need to: it trusts only the signed bytes, which already fix the
  * sealed cert id, thumbprint and expiry. The one cert-related check that can
  * run offline is the agent signature, and only when the caller supplies the
@@ -144,7 +144,7 @@ export type FailureCode =
  */
 const SUGGESTIONS: Record<FailureCode, string> = {
   UNSUPPORTED_FORMAT:
-    'This verifier reads exportFormatVersion 2.0 / RFC8949-CDE canonicalization. Re-export the chain from a current AGLedger instance, or upgrade the verifier to match the producing engine.',
+    'This verifier reads exportFormatVersion 2.0 / RFC8949-CDE canonicalization. Re-export the chain from a current AGLedger instance, or upgrade the verifier to match the producing Server.',
   CHAIN_EMPTY:
     'No entries were present to verify. Confirm the record id / dump directory is correct and that the chain has not been truncated to zero rows.',
   CHAIN_POSITION_GAP:
@@ -156,7 +156,7 @@ const SUGGESTIONS: Record<FailureCode, string> = {
   CHAIN_HASH_MISMATCH:
     'sha256(cose_sign1) does not equal the stored payloadHash. The envelope bytes or the stored hash were altered. The signed bytes are authoritative; the row was tampered with.',
   CHAIN_MALFORMED_ENTRY:
-    'An entry is missing a field the engine writes on every entry (coseSign1, payloadHash, or a parseable createdAt where a key window or the start of signing needs one), or carries it as another type. The export/dump is incomplete or was edited, and an entry the verifier cannot place is never read as early unsigned history. Regenerate the export/dump from the operator and re-run.',
+    'An entry is missing a field the Server writes on every entry (coseSign1, payloadHash, or a parseable createdAt where a key window or the start of signing needs one), or carries it as another type. The export/dump is incomplete or was edited, and an entry the verifier cannot place is never read as early unsigned history. Regenerate the export/dump from the operator and re-run.',
   CHAIN_COSE_DECODE_FAILED:
     'The COSE_Sign1 envelope did not decode as a tagged 4-element structure. The signed bytes are corrupt. Regenerate the export/dump.',
   CHAIN_COSE_HEADER_MISMATCH:
@@ -184,7 +184,7 @@ const SUGGESTIONS: Record<FailureCode, string> = {
   CHAIN_ACTOR_ATTRIBUTION_MISMATCH:
     'The entry\'s actorId / actorOwnerId columns name a different actor than the signature-covered actor claim in the COSE protected header (CWT_Claims label 15, private label -65539). The columns are the projection a report displays and they were rewritten after signing, re-attributing the action to another actor. Trust the signed claim; treat the row as tampered and re-obtain the export from the operator.',
   CHAIN_AGENT_SIGNATURE_INVALID:
-    'The agent signature sealed in predicate.on_behalf_of.agent_signature does not verify under the supplied key whose RFC 7638 thumbprint the entry itself names, or is sealed in a shape nothing can verify. The engine checks this signature at intake and the envelope signature says the engine wrote it, so this is not a caller mistake: treat the agent attribution of this entry as unproven and escalate to the operator.',
+    'The agent signature sealed in predicate.on_behalf_of.agent_signature does not verify under the supplied key whose RFC 7638 thumbprint the entry itself names, or is sealed in a shape nothing can verify. The Server checks this signature at intake and the envelope signature says the Server wrote it, so this is not a caller mistake: treat the agent attribution of this entry as unproven and escalate to the operator.',
   CHAIN_FEDERATION_WIRE_INVALID:
     'The federation message sealed in payload.wire does not hold: its body no longer hashes to the bodyHash the sender signed, the entry asserts a state, type, recommendation or dispute the sealed body does not carry, or (under the sender\'s federation key you supplied) the signature does not verify or the sealed senderPublicKey is not that key. The receiving Server verified the message at intake and signed this entry, so this is not a caller mistake: treat what the entry says the peer asserted as unproven and escalate to both operators.',
   CHAIN_EVIDENCE_BINDING_MISMATCH:
@@ -232,7 +232,7 @@ const SUGGESTIONS: Record<FailureCode, string> = {
   TENANT_CHECKPOINT_CLAIM_MISMATCH:
     'The claim signed inside an org_admin_reads tree-head envelope does not decode, or says something the tree-head row\'s columns do not (position, chain_tip_hash, leaf count, subject digest or signed kid). A column was rewritten beside an intact envelope. Trust the signed claim and treat the tree-head row as tampered.',
   TENANT_CHECKPOINT_FORK:
-    'Two signed tree heads at the same tree_size carry different roots. This is an engine fork or signing-key compromise. Escalate immediately.',
+    'Two signed tree heads at the same tree_size carry different roots. This is a Server fork or signing-key compromise. Escalate immediately.',
   KEY_STATEMENT_INVALID:
     'A key statement does not verify, disagrees with the columns it was stored under, touches no anchored key, or was signed by a key after its closure or after the key was already admitted. It admits nothing. One that does not verify, or that a key signed after its closure, is what a writer with database access or a leaked retired key produces: have the operator retire that key with force and add it to VAULT_DISTRUSTED_KEYS, and pass the same entry as distrustedKeys.',
   KEY_CLOSURE_INVALID:

@@ -1,19 +1,20 @@
 /**
  * Self-contained crypto + canonicalization primitives.
  *
- * Mirrors the AGLedger engine-side implementations:
- *   - COSE_Sign1 verify (RFC 9052 §4.4): audit-vault/encoders/cose-sign1.ts
+ * Mirrors what the AGLedger Server does when it signs and chains entries:
+ *   - COSE_Sign1 verify (RFC 9052 §4.4), the envelope the Server signs
  *   - RFC 9162 §2.1 Merkle tree, for SCITT Receipts and the org_admin_reads
- *     log alike: audit-vault/merkle-rfc9162.ts
+ *     log alike
  *
- * Re-implemented here (not imported from any engine/SDK code) so the verifier
- * has zero engine dependency, the load-bearing property of an offline
- * auditor: the engine could be compromised and this still verifies correctly.
+ * Re-implemented here (not imported from any Server or SDK code) so the
+ * verifier has zero Server dependency, the load-bearing property of an offline
+ * auditor: it runs no Server code, so given keys held out of band, a
+ * compromised Server cannot make it report a pass it did not earn.
  * The only runtime dependency is `cborg`, a general-purpose CBOR library (not
  * AGLedger code), and Node's built-in `crypto`. No network, no filesystem.
  *
- * If the engine-side primitives ever change shape, both implementations must be
- * updated together; the conformance corpus (real engine output) is the
+ * If the Server-side primitives ever change shape, both implementations must be
+ * updated together; the conformance corpus (real Server output) is the
  * regression net that catches divergence.
  */
 import { createPublicKey, getFips, hash, verify } from 'node:crypto';
@@ -44,7 +45,7 @@ export function sha256HexString(s: string): string {
  * public key can never be repurposed as a MAC key.
  */
 export interface KeyAlgorithm {
-  /** Registry name, matching the engine's `vault_signing_keys.algorithm` values. */
+  /** Registry name, matching the algorithm names the Server's key registry uses. */
   name: string;
   /** COSE `alg` values (protected header label 1) acceptable for this key. */
   coseAlgs: readonly number[];
@@ -184,11 +185,11 @@ export function resolveKeyAlgorithm(
 /**
  * Verify an Ed25519 signature over raw bytes.
  * `publicKeyBase64` is the SPKI DER public key, base64-encoded
- * (matches the engine's vault_signing_keys.public_key column).
+ * (the shape the Server's key registry publishes).
  *
  * Refuses non-Ed25519 keys. Node's `verify(null, ...)` silently falls back to
  * ECDSA/SHA-256 for EC keys, which would accept a signature no conformant
- * EdDSA verifier accepts (the engine guards the signing side the same way),
+ * EdDSA verifier accepts (the Server guards the signing side the same way),
  * so the key type is asserted before any crypto runs.
  *
  * CAUTION for direct callers: as with `verifySignatureBytes`, `false` conflates
@@ -224,9 +225,9 @@ export function verifyEd25519Bytes(
  * `runtimeCanCompute`). Collapsing those two into one boolean is what made a
  * FIPS-locked host report an intact Ed25519 chain as forged.
  *
- * ES256 mirrors the engine's `verifyWithAlgorithm`: SHA-256 digest passed
+ * ES256 mirrors how the Server verifies it: SHA-256 digest passed
  * positionally, `dsaEncoding: 'ieee-p1363'` (COSE raw r||s, 64 bytes). The
- * engine normalizes to low-S at sign time but, like the engine's verifier,
+ * Server normalizes to low-S at sign time but, like the Server's verifier,
  * high-S is accepted here: ECDSA malleability changes the envelope bytes,
  * which the hash-link layer already pins.
  */
@@ -415,9 +416,9 @@ function isFipsActive(): boolean {
  * the upgrade-vs-forgery distinction use `resolveKeyAlgorithm` first, as
  * `verifyCoseSign1` does).
  *
- * ES256 mirrors the engine's `verifyWithAlgorithm`: SHA-256 digest passed
+ * ES256 mirrors how the Server verifies it: SHA-256 digest passed
  * positionally, `dsaEncoding: 'ieee-p1363'` (COSE raw r||s, 64 bytes). The
- * engine normalizes to low-S at sign time but, like the engine's verifier,
+ * Server normalizes to low-S at sign time but, like the Server's verifier,
  * high-S is accepted here: ECDSA malleability changes the envelope bytes,
  * which the hash-link layer already pins.
  *
@@ -464,11 +465,11 @@ export interface CoseSign1Parts {
 }
 
 export function decodeCoseSign1(bytes: Uint8Array): CoseSign1Parts | null {
-  // Tag 18 is required (short-form 0xd2, matching the engine's encoder).
+  // Tag 18 is required (short-form 0xd2, matching the Server's encoder).
   // cborg's tag handler unwraps tag 18 but also returns an UNTAGGED 4-element
-  // array verbatim, and the engine rejects untagged envelopes: producer and
+  // array verbatim, and the Server rejects untagged envelopes: producer and
   // offline verifier must agree on what a COSE_Sign1 is, so gate on the
-  // leading byte the same way the engine's decoder does.
+  // leading byte the same way the Server's decoder does.
   if (bytes.length === 0 || bytes[0] !== COSE_SIGN1_TAG_PREFIX) return null;
   try {
     const decoded = cborDecode(bytes, {
@@ -505,7 +506,7 @@ export function decodeCoseSign1(bytes: Uint8Array): CoseSign1Parts | null {
  *   - 'decode-fail'  if the envelope is malformed
  *   - 'invalid'      if the signature does not verify
  *   - 'unsigned'     if the signature slot is all-zero at the key's expected
- *                    signature length (engine booted without VAULT_SIGNING_KEY
+ *                    signature length (a Server running without a signing key
  *                    at write time; chain integrity falls back to the hash-link
  *                    layer)
  *   - 'alg-mismatch' if the protected header's `alg` (label 1) is absent or is
@@ -593,10 +594,10 @@ function extractHeaderAlg(protectedBstr: Uint8Array): number | null {
 
 /**
  * Extract the signature-covered `kid` (protected header label 4) as lowercase
- * hex, matching the engine's `vault_signing_keys.key_id` shape. Returns null
+ * hex, matching the key id shape the Server's key registry uses. Returns null
  * when absent or malformed. The caller cross-checks it against the row's
  * `signingKeyId` column: the column is a denormalized convenience, the kid is
- * signed, so a rewritten column surfaces as drift (engine mirror: signing_key_drift).
+ * signed, so a rewritten column surfaces as drift (Server mirror: signing_key_drift).
  */
 export function extractKid(protectedBstr: Uint8Array): string | null {
   try {
@@ -647,12 +648,12 @@ export function extractChainClaim(protectedBstr: Uint8Array): ChainClaim | null 
  * Extract the actor identity claim (`-65539`) from a COSE_Sign1 protected
  * header. It is nested inside CWT_Claims (RFC 9597, label 15) rather than
  * sitting at the outer header level, because it IS an identity statement: the
- * engine keeps the outer level to IANA-known labels plus chain mechanics.
+ * Server keeps the outer level to IANA-known labels plus chain mechanics.
  *
- * `key_id` and `owner_id` are UUIDs the engine encodes as 16-byte CBOR byte
+ * `key_id` and `owner_id` are UUIDs the Server encodes as 16-byte CBOR byte
  * strings, returned here in canonical lowercase-hyphenated form so they
  * compare directly against the export's `actorId` / `actorOwnerId` columns.
- * Returns null when the claim is missing or malformed (engines older than the
+ * Returns null when the claim is missing or malformed (Servers older than the
  * claim, or an envelope that will not decode) so the caller can skip rather
  * than fail an entry that never carried it.
  */
@@ -747,7 +748,7 @@ export function extractTraceparentClaim(payloadBstr: Uint8Array): string | null 
 // --- Agent signature (predicate.on_behalf_of.agent_signature) ---
 
 /**
- * Domain-separation prefix the engine applies before verifying an agent's
+ * Domain-separation prefix the Server applies before verifying an agent's
  * `X-Agent-Signature` at intake: the agent signs the UTF-8 bytes of this
  * prefix followed by the lowercase hex sha256 of the raw request body (the
  * hex string, not the digest bytes). Distinct from the cert proof-of-possession
@@ -764,13 +765,13 @@ export interface AgentPublicKeyJwk {
 }
 
 /**
- * The agent-signature evidence the engine sealed into a chain entry, read from
+ * The agent-signature evidence the Server sealed into a chain entry, read from
  * the signed payload. Fields are left `unknown` where the verifier must check
- * their shape itself: a sealed value the engine never writes is a finding, not
+ * their shape itself: a sealed value the Server never writes is a finding, not
  * something to coerce.
  */
 export interface AgentSignatureClaim {
-  /** `on_behalf_of.validated === true`: the engine vouched for the identity. */
+  /** `on_behalf_of.validated === true`: the Server vouched for the identity. */
   validated: boolean;
   /** `on_behalf_of.cert.id`, when a cert is sealed beside the signature. */
   certId: string | null;
@@ -811,10 +812,10 @@ export function extractAgentSignatureClaim(payloadBstr: Uint8Array): AgentSignat
 const BASE64URL_32_BYTES = /^[A-Za-z0-9_-]{43}$/;
 
 /**
- * RFC 7638 thumbprint of an Ed25519 JWK in the engine's `sha256:<hex>` form,
+ * RFC 7638 thumbprint of an Ed25519 JWK in the Server's `sha256:<hex>` form,
  * or null when the value is not an Ed25519 public-key JWK. The members are
  * hashed in the RFC's lexicographic order (`crv`, `kty`, `x`), which is what
- * the engine's thumbprint function produces for an OKP key.
+ * the Server's thumbprint function produces for an OKP key.
  */
 export function ed25519JwkThumbprint(jwk: unknown): string | null {
   if (jwk === null || typeof jwk !== 'object' || Array.isArray(jwk)) return null;
@@ -843,9 +844,9 @@ const STANDARD_BASE64_64_BYTES = /^[A-Za-z0-9+/]{86}(==)?$/;
  *
  * - `ok`: the signature verifies over `AGENT_SIGNATURE_CONTEXT + <hex>`.
  * - `invalid`: well formed, does not verify under this key.
- * - `malformed`: a shape the engine never writes (alg other than EdDSA, a
+ * - `malformed`: a shape the Server never writes (alg other than EdDSA, a
  *   content hash not `sha256:<hex64>`, a signature that is not 64 bytes of
- *   standard base64). Nothing can verify it, which the engine also treats as
+ *   standard base64). Nothing can verify it, which the Server also treats as
  *   a break.
  * - `unsupported`: this host cannot compute Ed25519 (an active OpenSSL FIPS
  *   provider). NOT verified and NOT tamper evidence.
@@ -918,8 +919,7 @@ const RECORD_STATE_RESERVED_KEYS: ReadonlySet<string> = new Set([
 
 /**
  * Re-project (record_id, entry_type, payload) -> predicate body using the SAME
- * logic the engine uses at write time (engine-side: audit-vault/
- * build-vault-claim.ts). This is the verifier-side mirror.
+ * logic the Server uses at write time. This is the verifier-side mirror.
  *
  * Returns null when the row's payload is structurally insufficient (e.g.
  * SCHEMA_REGISTERED missing manifestDigest) or is not a JSON object at all (a
@@ -1050,7 +1050,7 @@ export function deepEqual(a: unknown, b: unknown): boolean {
 /**
  * Strip envelope-level sibling fields (`on_behalf_of`, `traceparent`) from a
  * decoded predicate. They ride alongside per-kind predicate fields on the wire
- * but the engine's `buildPredicateOnly` (and our `buildPredicateForRow`
+ * but the Server's own predicate builder (and our `buildPredicateForRow`
  * mirror) exclude them from the rebuilt predicate. Stripping here makes the
  * two shapes deep-equalable; envelope-level integrity is covered by the
  * signature and the OIDC-actor cross-check.
@@ -1070,18 +1070,18 @@ export function stripEnvelopeExtensions(
  * Whether the envelope extensions a row's payload carries are the ones the
  * entry signed. When a writer puts `on_behalf_of` (an object) or
  * `traceparent` (a W3C v00 string; any other value is dropped) at the top
- * level of the row payload, the engine lifts it into `predicate.on_behalf_of`
+ * level of the row payload, the Server lifts it into `predicate.on_behalf_of`
  * / `predicate.traceparent`, so a row copy must equal the signed value. The
  * row copy is what a reader of an export or dump sees, and
  * {@link stripEnvelopeExtensions} takes both sides out of the predicate
  * comparison, so without this check a rewritten or added row copy would still
  * verify.
  *
- * Anything else under those keys is ignored, as the engine ignores it: it
+ * Anything else under those keys is ignored, as the Server ignores it: it
  * lifts only an object `on_behalf_of` and a v00 `traceparent`, so a genuine
  * older row holding another shape signed nothing for it.
  *
- * A row without them is not a mismatch: the engine also signs an
+ * A row without them is not a mismatch: the Server also signs an
  * `on_behalf_of` built from the request's authentication rather than from the
  * payload, and that one never reaches the row payload. Its identity is held to
  * the row's actor columns by the OIDC-actor check instead.
@@ -1138,8 +1138,8 @@ export function rfc9162NodeHash(left: Uint8Array, right: Uint8Array): Uint8Array
 }
 
 /**
- * Verify a RFC 9162 §2.1.3.2 inclusion proof. Mirrors the engine-side
- * implementation; reproduced here so the verifier stays engine-free. False
+ * Verify a RFC 9162 §2.1.3.2 inclusion proof. Mirrors the Server-side
+ * implementation; reproduced here so the verifier stays Server-free. False
  * when `leafIndex` or `treeSize` is not a safe integer: the walk halves them,
  * and a fraction, NaN or an unsafe integer would walk some other tree.
  */

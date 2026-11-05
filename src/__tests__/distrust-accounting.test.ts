@@ -9,7 +9,7 @@ import { T0, makeKey, row, statement, type TestKey } from './key-statements-help
 /**
  * Entries of a dump a distrusted key signed, outside what it is trusted for
  * and before a key the walk trusts retired it: accounted for, listed as
- * CHAIN_SIGNED_BY_DISTRUSTED_KEY, never a failure. The engine's scan lists
+ * CHAIN_SIGNED_BY_DISTRUSTED_KEY, never a failure. The Server's scan lists
  * the same entries as `distrustedEntries`.
  */
 
@@ -136,7 +136,7 @@ describe('a dump entry signed by a pinned key distrusted from an instant', () =>
 });
 
 describe('chainOfScope', () => {
-  it('names a chain as the engine does', () => {
+  it('names a chain as the Server does', () => {
     expect(chainOfScope('7b1c0f6e-0000-4000-8000-000000000001')).toEqual({ chain: 'record', recordId: '7b1c0f6e-0000-4000-8000-000000000001', orgId: null });
     expect(chainOfScope('00000000-0000-0000-0000-000000000000')).toEqual({ chain: 'admin', recordId: null, orgId: null });
     expect(chainOfScope('schema:4a0e7f00-0000-4000-8000-000000000002')).toEqual({ chain: 'schema', recordId: null, orgId: '4a0e7f00-0000-4000-8000-000000000002' });

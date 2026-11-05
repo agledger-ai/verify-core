@@ -233,7 +233,7 @@ describe('no em dashes', () => {
 
 describe('offline verifier makes no network access', () => {
   // The verifier's entire value is producing a correct verdict even if the
-  // engine that produced the records is compromised. A verifier that can reach
+  // Server that produced the records is compromised. A verifier that can reach
   // the network could be steered to "phone home" for a verdict, so this package
   // must import nothing network-capable and never call fetch.
   const networkImport =

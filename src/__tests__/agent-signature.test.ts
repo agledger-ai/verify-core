@@ -23,7 +23,7 @@ import type { AgentPublicKeyJwk } from '../primitives.js';
  * opened naming a second cert agent as performer, and the child that agent
  * delegated under it. `agent-cert-key.json` is the Ed25519 JWK the first agent
  * sent at cert exchange; the second agent's key was not kept. The synthetic
- * cases below cover what a live engine will not
+ * cases below cover what a live Server will not
  * produce: a sealed agent signature that does not verify.
  */
 
@@ -74,7 +74,7 @@ describe('live chain content verifies', () => {
 });
 
 describe('agent signature re-check on live exports', () => {
-  it('the RFC 7638 thumbprint matches the one the engine recorded for the cert', () => {
+  it('the RFC 7638 thumbprint matches the one the Server recorded for the cert', () => {
     expect(ed25519JwkThumbprint(agentCert.publicKeyJwk)).toBe(agentCert.publicKeyThumbprint);
   });
 

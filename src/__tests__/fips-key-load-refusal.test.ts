@@ -142,8 +142,8 @@ function toEntry(envelope: Uint8Array, signingKeyId: string): NormalizedEntry {
 
 describe('a runtime that refuses to LOAD an Ed25519 key', () => {
   it('reports a valid Ed25519 envelope as unsupported, not invalid', () => {
-    // The exact cell testbed re-measured against the 1.4.0 candidate and found
-    // unchanged from the published build.
+    // The exact cell a FIPS-locked runtime hits: the key will not load, so the
+    // result is unsupported rather than a forged-signature verdict.
     expect(verifyCoseSign1(edEnvelope, spkiBase64(ed.publicKey))).toBe(
       'unsupported-key-algorithm',
     );

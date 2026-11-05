@@ -4,7 +4,7 @@ The shared offline verification core for AGLedger audit chains. Decodes
 canonical **COSE_Sign1** envelopes (RFC 9052, tag 18) over in-toto v1
 Statement payloads, walks the per-record hash chain, and verifies the
 signature over each `Sig_structure` under the algorithm the verification key
-commits to (Ed25519 or ES256), with no engine, no database, and no network.
+commits to (Ed25519 or ES256), with no Server, no database, and no network.
 
 Reads exports and dumps from an AGLedger Server 2.0 or later. For a 1.x Server's, use `npm i @agledger/verify-core@1.5.0`, the last release that reads them.
 
@@ -197,7 +197,7 @@ no longer trusted and its window no longer graded.
 
 Statements are walked in the order the Server's database stored them,
 `createdAt` then the row `id`, never by an instant a statement signs. A dump
-carries that order (`created_at`), and so does every key document an API 2.0
+carries that order (`created_at`), and so does every key document a Server 2.0
 Server serves: each statement in an export's `signingKeyStatements`,
 `/v1/verification-keys` and `/.well-known/agledger-vault-keys.json` carries
 its row `id` and `createdAt` at microsecond precision, and `keyTrust.order`
@@ -205,7 +205,7 @@ reads `written`. A `createdAt` that is not strict RFC 3339 (a `T`, an offset
 or `Z`, a real calendar date) places nothing, and its statement is
 `KEY_STATEMENT_INVALID`. Such a document lists under a trusted key its
 admission, every later admission it signed, and the closures that count for
-it, so a walk over it dates each window and cuts each edge back as the engine
+it, so a walk over it dates each window and cuts each edge back as the Server
 does. Where it cannot (a later succession whose endorser the document does not
 carry, or a closure by a key it does not list), the walk grades the window
 more loosely than the listed one, and the listed `activatedAt` or `retiredAt`
@@ -229,14 +229,14 @@ out of a distrusted key never admits a key or keeps one reachable, whatever
 time it carries. Such a statement still counts for everything that can only
 narrow trust: it dates its subject's window, cuts the subject's edge back as a
 later admission, and a closure the key signed still ends a window. Where the
-document dates it before the cutoff, so the engine would count it, it is no
+document dates it before the cutoff, so the Server would count it, it is no
 finding: it is listed in `keyTrust.notes`, which never fails a verdict, and an
 honest rotation away from the key passes when you pin its successor. Pinned
 only on the distrusted key, its successor is not anchored. This is narrower
-than the engine, which holds the key to the time its statements were really
+than the Server, which holds the key to the time its statements were really
 stored, and never wider. Only
 a dump walk holds a distrusted key's statements to their `created_at`, as the
-engine does, and that adds assurance only for a dump you took from the Server
+Server does, and that adds assurance only for a dump you took from the Server
 yourself or over a channel you trust; for any other dump it assures no more
 than the stored times its holder chose.
 
@@ -289,13 +289,13 @@ once signing began.
 
 A dump row repeating an earlier row's signed payload counts once, at its
 first write: a row copied in the database under a new id and time says
-nothing new, as the engine reads it. On a key document a copy stays a second
+nothing new, as the Server reads it. On a key document a copy stays a second
 statement, since its `createdAt` is the holder's word.
 
 On a dump, a `distrustedKeys` key that a key the walk trusts has retired is
 bounded by that retirement (its `DistrustSpan` in `trust.distrustSpans`; only a
-retirement by a key the walk trusts counts, as in the engine), and
-what it signed before then is accounted for rather than failed, as the engine's
+retirement by a key the walk trusts counts, as in the Server), and
+what it signed before then is accounted for rather than failed, as the Server's
 scan lists it: a key statement it signed that counts for nothing is listed in
 `trust.accounted` (and the report's `accounted`) instead of `findings`, and a
 chain entry whose signature verifies under it, outside what the key is

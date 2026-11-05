@@ -29,7 +29,7 @@ import {
 } from './key-statements-helpers.js';
 
 /**
- * The trust walk, ported case for case from the engine's key-statements.test.ts
+ * The trust walk, ported case for case from the Server's key-statements.test.ts
  * so the two are held to the same behaviour. Registry findings carry this
  * package's codes: key_statement_invalid is KEY_STATEMENT_INVALID,
  * key_closure_invalid is KEY_CLOSURE_INVALID, key_window_drift is
@@ -660,7 +660,7 @@ describe('distrusted keys (the Server\'s VAULT_DISTRUSTED_KEYS)', () => {
     expect(retired.accounted[0]!.detail).toContain('the distrust entry accounts for it');
     expect(retired.distrustSpans.get(s.digest)).toEqual({ cutoff: at(2), retiredAt: at(5) });
     // A key document carries no write time the walk holds anything to: there
-    // the same statement is a finding, as the engine expects a verifier of
+    // the same statement is a finding, as the Server expects a verifier of
     // the published statements to read it.
     const asDoc = walk(rows.map(({ source: _s, ...k }) => k), statements.map(({ source: _s, ...st }) => ({ ...st, source: 'document' as const })), anchors, distrusted);
     expect(asDoc.accounted).toEqual([]);
@@ -819,7 +819,7 @@ describe('a walk over an older key document (no write order)', () => {
     const c = makeKey();
     const n = makeKey();
     const succ = statement('succession', n, { endorser: c, signers: [c, n], activatedAt: T1 });
-    // A copy repeats the signed payload, so it says nothing new, as the engine reads it.
+    // A copy repeats the signed payload, so it says nothing new, as the Server reads it.
     const keys = [{ keyId: c.kid, publicKey: c.publicKey }];
     for (const statements of [[succ, { ...succ, id: nextId() }], asDocument([succ, succ])]) {
       const trust = walk(keys, statements, [n.digest]);
@@ -896,14 +896,14 @@ describe('a walk over a key document that publishes write order', () => {
     expect(trust.findings.map((f) => [f.code, f.statementId])).toEqual([['KEY_STATEMENT_INVALID', planted.id]]);
   });
 
-  it('a later admission a trusted key publishes dates its window and cuts its edge back, as the engine walks the whole registry', () => {
+  it('a later admission a trusted key publishes dates its window and cuts its edge back, as the Server walks the whole registry', () => {
     const c = makeKey();
     const n = makeKey();
     const genesis = statement('genesis', c, { signers: [c], activatedAt: T0 });
     const succ = statement('succession', n, { endorser: c, signers: [c, n], activatedAt: T1 });
     const later = statement('genesis', n, { signers: [n], activatedAt: T2 });
     const at = new Map([[genesis, T0], [succ, T1], [later, T2]]);
-    // The engine files the later genesis under n: from n alone the edge back
+    // The Server files the later genesis under n: from n alone the edge back
     // to c is cut, and n's window opens at T2.
     const doc = publish([{ key: n, activatedAt: T2, statements: [succ, later] }, { key: c, activatedAt: T0, statements: [genesis] }], at);
     const fromN = walkDocument(doc, [n]);
@@ -917,7 +917,7 @@ describe('a walk over a key document that publishes write order', () => {
     expect(anchoredKids(fromC)).toEqual([c.kid, n.kid].sort());
     expect(fromC.byDigest.get(n.digest)!.activatedAt).toBe(T2);
     // A document carrying only n's first admission dates it at T1 and takes
-    // the edge back the engine refuses; the listed activatedAt reads as drift.
+    // the edge back the Server refuses; the listed activatedAt reads as drift.
     const firstOnly = publish([{ key: n, activatedAt: T2, statements: [succ] }, { key: c, activatedAt: T0, statements: [genesis] }], at);
     const old = walkDocument(firstOnly, [n]);
     expect(anchoredKids(old)).toEqual([c.kid, n.kid].sort());
@@ -972,7 +972,7 @@ describe('a walk over a key document that publishes write order', () => {
     expect(trust.findings).toEqual([]);
   });
 
-  it('a later succession whose endorser the document does not carry dates the window earlier than the engine, and the listed activatedAt says so', () => {
+  it('a later succession whose endorser the document does not carry dates the window earlier than the Server, and the listed activatedAt says so', () => {
     const c = makeKey();
     const n = makeKey();
     const unpublished = makeKey();
@@ -1001,7 +1001,7 @@ describe('the source a statement is read from', () => {
   const succ = statement('succession', x, { endorser: c, signers: [c, x], activatedAt: T2, createdAt: '2026-09-01T12:00:00.000000Z' });
   const base = { keys: [row(c, T0)], trustAnchors: [`sha256:${c.digest}`], distrustedKeys: [`sha256:${c.digest}@${T1}`] };
 
-  it('a dump row is held to its created_at against a distrusted key\'s cutoff, as the engine holds it', () => {
+  it('a dump row is held to its created_at against a distrusted key\'s cutoff, as the Server holds it', () => {
     expect(computeKeyTrust({ ...base, statements: [genesis, succ] }).trusted.has(x.digest)).toBe(true);
   });
 
@@ -1011,7 +1011,7 @@ describe('the source a statement is read from', () => {
       const trust = computeKeyTrust({ ...base, keys: base.keys.map(({ source: _k, ...k }) => k), statements });
       expect(trust.order).toBe('written');
       expect(trust.trusted.has(x.digest)).toBe(false);
-      // Its time is before the cutoff, where the engine would count it: voided
+      // Its time is before the cutoff, where the Server would count it: voided
       // here only by the source rule, it is a note, not a finding.
       expect(trust.findings).toEqual([]);
       expect(trust.notes).toEqual([expect.objectContaining({ keyId: x.kid, statementId: succ.id })]);
@@ -1075,7 +1075,7 @@ describe('trustAnchors and distrustedKeys parsing', () => {
 });
 
 /**
- * Random registries, ported from the engine: an honest history (a genesis,
+ * Random registries, ported from the Server: an honest history (a genesis,
  * rotations, routine retirements from another active key, and sometimes a key
  * anchored only by a pin) interleaved with what an attacker can store:
  * statements under keys the runtime role generates, copies of rows, and, once
@@ -1391,7 +1391,7 @@ describe('distrusted keys over a key document (no write order)', () => {
   });
 });
 
-describe('narrower than the engine where its reading accounts for what should fail', () => {
+describe('narrower than the Server where its reading accounts for what should fail', () => {
   const at = (m: number) => `2026-09-02T00:${String(m).padStart(2, '0')}:00.000000Z`;
 
   it('a key document copy dated earlier does not push the published statement aside', () => {

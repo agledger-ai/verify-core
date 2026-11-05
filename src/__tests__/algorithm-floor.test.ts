@@ -15,7 +15,7 @@ import type { NormalizedEntry, VerificationKey } from '../chain.js';
  * The verifier forward-compatibility floor (signing-agility Phase 0).
  *
  * Exit criteria pinned here:
- *   - a conformant ES256 envelope verifies (signing-agility wave 2), and an
+ *   - a conformant ES256 envelope verifies (ES256 support), and an
  *     algorithm past this build (ES384) yields CHAIN_UNSUPPORTED_ALGORITHM
  *     with valid:false (an upgrade signal, but never a pass);
  *   - a tampered-alg Ed25519 envelope yields a tamper-class failure, never an
@@ -27,8 +27,8 @@ import type { NormalizedEntry, VerificationKey } from '../chain.js';
  *     signature length, after algorithm resolution, and on an entry that
  *     names a key it is a signature failure, never an unsigned entry;
  *   - the signature-covered kid (label 4) is cross-checked against the row's
- *     signingKeyId column (engine mirror: signing_key_drift);
- *   - untagged COSE_Sign1 is rejected, matching the engine's decoder.
+ *     signingKeyId column (Server mirror: signing_key_drift);
+ *   - untagged COSE_Sign1 is rejected, matching the Server's decoder.
  */
 
 const COSE_TAG_PREFIX = 0xd2;
@@ -143,7 +143,7 @@ describe('verifyEd25519Bytes refuses non-Ed25519 keys', () => {
   });
 });
 
-describe('ES256 verification (signing-agility wave 2)', () => {
+describe('ES256 verification (ES256 support)', () => {
   const envelope = buildEnvelope({ alg: -7, kidHex: ES_KEY_ID, position: 1, previousHash: null, signer: esSigner });
 
   it('a conformant ES256 envelope verifies ok', () => {
@@ -195,7 +195,7 @@ describe('ES256 verification (signing-agility wave 2)', () => {
 
 describe('exit criterion preserved: an algorithm past this build fails closed', () => {
   // ES384 is recognized in the table but not verifiable; it inherits the role
-  // ES256 played before wave 2: an upgrade signal, never a pass.
+  // ES256 played before it was verified: an upgrade signal, never a pass.
   const es384 = generateKeyPairSync('ec', { namedCurve: 'secp384r1' });
   const es384Key: VerificationKey = {
     keyId: ES_KEY_ID,
@@ -269,7 +269,7 @@ describe('unsigned sentinel is key-length-derived, and fails on an entry that na
     signatureOverride: new Uint8Array(64),
   });
 
-  // The engine writes a key id only beside a signature it made with that key,
+  // The Server writes a key id only beside a signature it made with that key,
   // and grades a zeroed slot under a named key `signature_invalid`. An entry
   // naming a key therefore cannot be unsigned, with or without a policy.
   it('64 zero bytes under an Ed25519 key read unsigned, and the entry fails CHAIN_SIGNATURE_INVALID', () => {
@@ -309,7 +309,7 @@ describe('unsigned sentinel is key-length-derived, and fails on an entry that na
   });
 });
 
-describe('signed-kid binding (engine signing_key_drift mirror)', () => {
+describe('signed-kid binding (Server signing_key_drift mirror)', () => {
   it('fails CHAIN_SIGNING_KEY_DRIFT when the row column names a different key than the signed kid', () => {
     // Envelope signed with (and naming) the Ed25519 key; the row column claims
     // the ES key id, which also resolves in the registry. Without the kid
@@ -342,7 +342,7 @@ describe('registry algorithm declaration cross-check', () => {
 
 describe('empty-string signingKeyId is not the unsigned marker', () => {
   it('fails CHAIN_SIGNATURE_MISSING_KEY instead of skipping the signature check', () => {
-    // Only null is the engine's unsigned-mode marker. A tampered row carrying
+    // Only null is the Server's unsigned-mode marker. A tampered row carrying
     // signingKeyId:"" must not ride the null-key skip branch to a green chain.
     const envelope = buildEnvelope({ alg: -8, position: 1, previousHash: null, signer: edSigner });
     const result = verifyChain([toEntry(envelope, 1, null, '')], registry(edKey));
@@ -352,7 +352,7 @@ describe('empty-string signingKeyId is not the unsigned marker', () => {
   });
 });
 
-describe('untagged COSE_Sign1 rejection (engine decoder parity)', () => {
+describe('untagged COSE_Sign1 rejection (Server decoder parity)', () => {
   it('decodeCoseSign1 returns null for an untagged envelope', () => {
     const untagged = buildEnvelope({ alg: -8, position: 1, previousHash: null, signer: edSigner, untagged: true });
     expect(decodeCoseSign1(untagged)).toBeNull();

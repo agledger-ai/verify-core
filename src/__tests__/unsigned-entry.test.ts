@@ -15,7 +15,7 @@ import type { FailureCode } from '../failures.js';
 
 /**
  * When an entry with no signing key id is a break (CHAIN_ENTRY_UNSIGNED) and
- * when it is only reduced coverage, graded as the engine grades
+ * when it is only reduced coverage, graded as the Server grades
  * `signature_missing`:
  *   1. after a signed entry in the same chain, or
  *   2. written at or after the earliest activatedAt in the key set, retired

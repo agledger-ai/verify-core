@@ -1,6 +1,6 @@
 /**
  * Test-only signer for vault key statements, written from the statement
- * format (the engine's encodeKeyStatementPayload / signKeyStatement), so the
+ * format (the Server's encodeKeyStatementPayload / signKeyStatement), so the
  * walk under test never checks bytes it produced itself.
  */
 import { createHash, generateKeyPairSync, randomBytes, sign } from 'node:crypto';

@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 
 /**
  * The walk on a host that cannot compute Ed25519 (an active OpenSSL FIPS
- * provider), ported from the engine's "a host that cannot compute a key's
+ * provider), ported from the Server's "a host that cannot compute a key's
  * algorithm" cases. Simulated the way fips-runtime.test.ts does it: EdDSA
  * verify() throws, everything else is real. Opaque keys are Ed25519 keys as
  * such a host sees them, bytes that do not parse, with signatures nothing can

@@ -14,9 +14,9 @@ import type { RecordAuditExportInput } from '../audit-export.js';
  * `key_temporal`, and `payload_binding`) to `applied` on the export
  * path when those inputs are present.
  *
- * The corpus is real agledger-api output (`testdata/conformance/export/valid.json`);
+ * The corpus is real Server output (`testdata/conformance/export/valid.json`);
  * these assertions catch backslide either if verify-core stops reading the
- * fields or if the engine stops emitting them.
+ * fields or if the Server stops emitting them.
  */
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -42,7 +42,7 @@ describe('export-path optional checks (Pass-2 wire parity)', () => {
   it('surfaces verificationGuide.unsignedFields as unsignedProjectionFields', () => {
     const base = loadValid();
 
-    // The real engine ships the guidance on every export; the verifier echoes
+    // The real Server ships the guidance on every export; the verifier echoes
     // it verbatim so a caller can warn that a PASS doesn't vouch for the
     // unsigned display labels.
     const real = verifyAuditExport(base);
@@ -50,7 +50,7 @@ describe('export-path optional checks (Pass-2 wire parity)', () => {
     expect(real.unsignedProjectionFields).toEqual(base.verificationGuide?.unsignedFields ?? []);
     expect(real.unsignedProjectionFields.length).toBeGreaterThan(0);
 
-    // An export without the guidance (older engines) reports an empty list.
+    // An export without the guidance (older Servers) reports an empty list.
     const withoutGuide: RecordAuditExportInput = { ...base };
     delete withoutGuide.verificationGuide;
     expect(verifyAuditExport(withoutGuide).unsignedProjectionFields).toEqual([]);

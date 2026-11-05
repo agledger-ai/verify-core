@@ -19,7 +19,7 @@
  *     inputs): binding-integrity, OIDC-actor cross-check, temporal
  *     key-validity, the agent-signature re-check, and key anchoring (a
  *     registry marked by `applyKeyTrust`). The first three run on
- *     the dump and on any export from an engine that ships the row fields
+ *     the dump and on any export from a Server that ships the row fields
  *     (>= v0.26.x). The agent-signature check needs the cert's public key,
  *     which neither surface carries, so it runs only when the caller passes
  *     `agentKeys`. A check without its input is reported `skipped_no_input`,
@@ -29,7 +29,7 @@
  * branch comes LAST, after the binding/OIDC checks, so a row written without a
  * signing key is still subject to every structural check, and a tamper finding
  * on it is reported under its own code rather than as CHAIN_ENTRY_UNSIGNED.
- * That branch grades the entry the way the engine does: an unsigned entry
+ * That branch grades the entry the way the Server does: an unsigned entry
  * after a signed one in its chain, or written at or after the earliest key
  * activation (`signingSince`), is CHAIN_ENTRY_UNSIGNED; an earlier one is a
  * `skipped` signature, reduced coverage rather than a break.
@@ -84,18 +84,18 @@ export type KeyTrustState = 'anchored' | 'unanchored' | 'undecided';
 /** A public key the walk can verify signatures against. */
 export interface VerificationKey {
   keyId: string;
-  /** SPKI DER, base64-encoded (the engine's vault_signing_keys.public_key shape). */
+  /** SPKI DER, base64-encoded (the shape the Server's key registry publishes). */
   spkiBase64: string;
   /**
    * `supplied` = passed by the caller. `embedded` = shipped inside the
-   * artifact being verified (the export or dump the engine produced). Surfaced
+   * artifact being verified (the export or dump the Server produced). Surfaced
    * in the result so a caller can tell whether it verified against a key it
    * brought or against the artifact's own answer key.
    */
   source: KeySource;
   /**
-   * Algorithm the key registry DECLARES for this key (the engine's
-   * `vault_signing_keys.algorithm` column), when the input surface carries it.
+   * Algorithm the key registry DECLARES for this key (the Server's
+   * registry algorithm field), when the input surface carries it.
    * Cross-checked against the algorithm the SPKI key material actually commits
    * to: a divergence means the registry row lies about its own key and fails
    * CHAIN_ALG_MISMATCH. The declared string never selects the verification
@@ -149,7 +149,7 @@ export function buildKeyRegistry(keys: readonly VerificationKey[]): KeyRegistry 
 
 /**
  * Agent cert keys for the agent-signature check, indexed by the RFC 7638
- * thumbprint (`sha256:<hex>`) the engine seals as
+ * thumbprint (`sha256:<hex>`) the Server seals as
  * `predicate.on_behalf_of.cert.thumbprint`. Values are SPKI DER, base64.
  */
 export type AgentKeyRegistry = ReadonlyMap<string, string>;
@@ -191,7 +191,7 @@ export interface NormalizedEntry {
   signingKeyId: string | null;
   /**
    * ISO-8601 write time, for temporal key-validity and the unsigned-entry
-   * rule. The engine writes one on every entry, so wherever the walk needs it
+   * rule. The Server writes one on every entry, so wherever the walk needs it
    * (the entry's key carries a window, or the entry is unsigned and the key
    * set dates the start of signing) a missing or unparseable value fails
    * CHAIN_MALFORMED_ENTRY rather than skipping the check.
@@ -231,7 +231,7 @@ export interface NormalizedEntry {
 
 /**
  * Checks that run only when their input is present. `agent_signature` is
- * applied when at least one entry carrying an engine-validated agent signature
+ * applied when at least one entry carrying a Server-validated agent signature
  * had its cert key supplied by the caller (`agentKeys`); neither the export
  * nor the dump carries cert public keys.
  */
@@ -258,7 +258,7 @@ export interface SignatureOutcome {
    *   failed, or the envelope would not decode).
    * - `unsigned`: retained for type compatibility; `verifyChain` no longer
    *   produces it. An all-zero signature on an entry that names a key is
-   *   `invalid` (CHAIN_SIGNATURE_INVALID), as the engine grades it.
+   *   `invalid` (CHAIN_SIGNATURE_INVALID), as the Server grades it.
    * - `skipped`: the chain is intact but this entry has no signing key, so the
    *   signature check was deliberately not run. Only an entry written before
    *   the install began signing gets here: before any signed entry in its
@@ -303,13 +303,13 @@ export type AccountedEntryCode = typeof ACCOUNTED_ENTRY_CODE;
  * `distrustedKeys` names, that falls outside what the key is trusted for
  * (the key is unanchored, or the entry was written at or after its cutoff),
  * and that was written before a key the walk trusts retired it. The distrust
- * entry and that retirement account for it, as the engine's scan lists it in
+ * entry and that retirement account for it, as the Server's scan lists it in
  * `distrustedEntries`: it is listed, it is not verified, and it fails
  * nothing. An entry written after that retirement, or under a distrusted key
  * no trusted key has retired, fails as before (CHAIN_SIGNING_KEY_UNANCHORED
  * or CHAIN_KEY_EXPIRED). An audit export never carries one.
  *
- * `chain` and `recordId`/`orgId` name the chain as the engine does: a record
+ * `chain` and `recordId`/`orgId` name the chain as the Server does: a record
  * chain by its record id, the platform-ops chain (record id
  * 00000000-0000-0000-0000-000000000000) as `admin`, and an org's schema chain
  * (`schema:<orgId>`, `schema:__platform__` for the platform's) as `schema`.
@@ -416,7 +416,7 @@ export interface VerifyChainOptions {
   requireSuppliedKeys?: boolean;
   /**
    * Agent cert keys (see `buildAgentKeyRegistry`). When an entry's signed
-   * payload carries an engine-validated `on_behalf_of.agent_signature` and its
+   * payload carries a Server-validated `on_behalf_of.agent_signature` and its
    * sealed cert thumbprint matches a key here, the signature is re-verified
    * offline; a failure is CHAIN_AGENT_SIGNATURE_INVALID.
    */
@@ -449,9 +449,9 @@ export interface VerifyChainOptions {
 /**
  * The earliest `activatedAt` among `keys`, as the ISO string it was given in,
  * or `null` when no key carries a parseable one. This is the instant from
- * which the engine treats every chain entry and checkpoint as required to be
+ * which the Server treats every chain entry and checkpoint as required to be
  * signed; pass every key the verifier knows, retired ones included, since the
- * engine reads it as `min(activated_at)` over its whole key registry.
+ * Server reads it as `min(activated_at)` over its whole key registry.
  */
 export function earliestKeyActivation(
   keys: Iterable<{ activatedAt?: string | null }>,
@@ -475,7 +475,7 @@ export function earliestKeyActivation(
  *
  * False when `signingSince` is absent or unparseable: with no instant from
  * which the install signs, nothing has to be signed. True when `signingSince`
- * is known and `writtenAt` is missing or not strict RFC 3339: the engine times every
+ * is known and `writtenAt` is missing or not strict RFC 3339: the Server times every
  * row, so a row with no readable time was edited, and it cannot be placed
  * before signing began. It fails closed rather than reading as early history.
  */
@@ -592,7 +592,7 @@ export function verifyChain(
       optionalChecks,
       mustSign,
     );
-    // As the engine's walk does: any earlier row naming a key, whatever its own
+    // As the Server's walk does: any earlier row naming a key, whatever its own
     // verdict, means this chain was already being signed.
     if (entry.signingKeyId !== null) mustSign.signedBefore = true;
     if (result.valid && result.accounted === undefined) {
@@ -762,10 +762,10 @@ function checkSealedFederationWire(
 
 /**
  * Offline re-check of a sealed agent signature, on an entry that already
- * passed every other check (so its payload is the engine's signed bytes).
+ * passed every other check (so its payload is the Server's signed bytes).
  *
- * Runs only on an engine-validated identity (`on_behalf_of.validated: true`).
- * On a caller-asserted one, entries written before the engine sealed these
+ * Runs only on a Server-validated identity (`on_behalf_of.validated: true`).
+ * On a caller-asserted one, entries written before the Server sealed these
  * fields itself carry them as caller passthrough, and the marker telling the
  * two apart is a column neither the export nor the dump publishes, so a
  * failure there could not be told from a claim nobody ever checked.
@@ -922,14 +922,14 @@ function verifyEntry(
   }
 
   // Input-gated: actor attribution. The row's actorId/actorOwnerId columns are
-  // the projection a report displays as "who did this", and the engine's own
+  // the projection a report displays as "who did this", and the Server's own
   // export guide names them as the trustworthy attribution while listing only
   // actorDisplayName / actorOwnerType / humanReadableLabel as unsigned. They
   // are signature-covered, at CWT_Claims label 15 -> private label -65539, so
   // a rewritten column is a re-attribution of the action to another actor and
   // must not verify. Same shape as the signed-kid check above: compare the
   // column against the signed claim, and skip only when one side is absent
-  // (an older engine that never carried the claim, or an artifact that does
+  // (an older Server that never carried the claim, or an artifact that does
   // not carry the columns).
   const attribution = entry.actorAttribution;
   if (attribution) {
@@ -958,7 +958,7 @@ function verifyEntry(
   }
 
   // Input-gated: binding-integrity. Runs whenever the row payload is present:
-  // the dump always carries it, and the export now carries it too (engine ≥ v0.26.x).
+  // the dump always carries it, and the export now carries it too (Server ≥ v0.26.x).
   if (entry.binding) {
     optionalChecks.payload_binding = 'applied';
     const decodedRaw = decodePredicate(parts.payloadBstr);
@@ -992,12 +992,12 @@ function verifyEntry(
   }
 
   // Signature (last, so a null-key row still ran every structural check above).
-  // Only a true null is the engine's unsigned-mode marker. Any other value,
-  // including the empty string no engine emits, must resolve in the registry
+  // Only a true null is the Server's unsigned-mode marker. Any other value,
+  // including the empty string no Server emits, must resolve in the registry
   // and fails CHAIN_SIGNATURE_MISSING_KEY below: a truthiness shortcut here
   // would let a tampered signingKeyId:"" row skip its signature check.
   if (entry.signingKeyId === null) {
-    // Engine mirror of `signature_missing`. An unsigned entry is reduced
+    // Server mirror of `signature_missing`. An unsigned entry is reduced
     // coverage only where the install had not yet begun to sign: before any
     // signed entry in this chain, and before the earliest key activation.
     // Anywhere else no process of the install could have written it; it is
@@ -1012,7 +1012,7 @@ function verifyEntry(
         'Entry has no signingKeyId but follows a signed entry in the same chain.',
       );
     }
-    // The engine times every entry. Without a time the walk can read, an
+    // The Server times every entry. Without a time the walk can read, an
     // unsigned entry cannot be placed before signing began, so it is not
     // early history: it fails closed.
     if (mustSign.signingSince !== null && !isInstant(entry.createdAt)) {
@@ -1074,8 +1074,8 @@ function verifyEntry(
     );
   }
 
-  // Signed-kid binding (engine mirror: signing_key_drift), ahead of every
-  // question about the key, as the engine orders it. The row's signingKeyId
+  // Signed-kid binding (Server mirror: signing_key_drift), ahead of every
+  // question about the key, as the Server orders it. The row's signingKeyId
   // column selected the key above, but the column is a denormalized
   // convenience; the kid at protected-header label 4 is signature-covered. A
   // divergence means the column was rewritten after signing, e.g. to point
@@ -1093,7 +1093,7 @@ function verifyEntry(
     );
   }
 
-  // Input-gated: key anchoring (engine mirror: signing_key_unanchored). Runs
+  // Input-gated: key anchoring (Server mirror: signing_key_unanchored). Runs
   // when a key-statement walk marked the registry. A key nothing signed links
   // to a pinned anchor is one anything with write access to the Server's
   // database can register, so an entry under it is a forgery until shown
@@ -1130,7 +1130,7 @@ function verifyEntry(
   }
 
   // Registry self-consistency: when the input surface declares an algorithm for
-  // this key (vault_signing_keys.algorithm), it must agree with what the SPKI
+  // this key, it must agree with what the SPKI
   // key material commits to. A registry row that lies about its own key is the
   // signature of a mis-registered key (the pre-guard P-256 corruption shape) or
   // a rewritten registry, and nothing verified against it can be trusted.
@@ -1145,7 +1145,7 @@ function verifyEntry(
 
   // Input-gated: temporal key-validity, whenever the key carries a window.
   // Compared at millisecond precision, the precision of an entry's write time,
-  // truncating a microsecond window edge the way the engine does. The engine
+  // truncating a microsecond window edge the way the Server does. The Server
   // times every entry, so an entry with no time the walk can read cannot be
   // placed inside the window, and fails closed rather than skipping it.
   if (typeof key.activatedAt === 'string' || typeof key.retiredAt === 'string' || typeof key.distrustCutoff === 'string') {
@@ -1189,7 +1189,7 @@ function verifyEntry(
   const outcome = verifyCoseSign1(envelopeBytes, key.spkiBase64);
   if (outcome === 'unsigned') {
     // An all-zero signature slot on an entry that CLAIMS a signing key. The
-    // engine writes a key id only beside a signature it made with that key,
+    // Server writes a key id only beside a signature it made with that key,
     // and fails this shape `signature_invalid`, so it is a forged or wiped
     // signature, never an unsigned entry. (A genuinely unsigned entry carries
     // a null signingKeyId and is graded above.)
@@ -1265,8 +1265,8 @@ function checkOidcActor(
     return null;
   }
 
-  // synthesized=false: engine writers leave the columns null. Any populated
-  // state is a DB-level CHECK-constraint bypass.
+  // synthesized=false: the Server leaves the columns null. Any populated
+  // state means the row was altered outside the Server.
   if (synthesized === false && (rowIss !== null || rowSub !== null)) {
     return fail(
       scopeId,

@@ -6,7 +6,7 @@
  * normalized entry and runs `verifyChain`.
  *
  * The three row-level input-gated checks run on the export path when the wire
- * carries their inputs (engine ≥ v0.26.x): the `actorOidcSynthesized` flag +
+ * carries their inputs (Server 0.26 and later): the `actorOidcSynthesized` flag +
  * `actorOidcIss/Sub` enable the OIDC-actor cross-check; `signingKeyWindows` +
  * per-entry `createdAt` enable temporal key-validity; and the per-entry
  * denormalized `payload` + `entryType` enable binding-integrity, the export's
@@ -14,7 +14,7 @@
  * tampering of the human-readable `payload`/`criteria` view: the verifier
  * re-decodes the signed predicate from `coseSign1` and deep-equals it against
  * the row `payload`, so a rewritten `payload` with an intact envelope fails
- * CHAIN_PAYLOAD_BINDING_MISMATCH (validated against a real engine v0.26.4
+ * CHAIN_PAYLOAD_BINDING_MISMATCH (validated against a real Server v0.26.4
  * export; `buildPredicateForRow` reconstructs the signed predicate exactly).
  * Older exports without these fields stay `skipped_no_input`, surfaced in the
  * result so a caller never mistakes "not checked here" for "checked and passed".
@@ -65,11 +65,11 @@ export interface AuditExportEntryInput {
    * CHAIN_MALFORMED_ENTRY.
    */
   createdAt?: string | null;
-  /** OIDC issuer the actor was synthesized from (engine ≥ v0.26.x). */
+  /** OIDC issuer the actor was synthesized from (Server 0.26 and later). */
   actorOidcIss?: string | null;
-  /** OIDC subject the actor was synthesized from (engine ≥ v0.26.x). */
+  /** OIDC subject the actor was synthesized from (Server 0.26 and later). */
   actorOidcSub?: string | null;
-  /** Tri-state from `audit_vault.actor_oidc_synthesized` (engine ≥ v0.26.x). Marker for the OIDC-actor check. */
+  /** Tri-state `actor_oidc_synthesized` marker (Server 0.26 and later). Marker for the OIDC-actor check. */
   actorOidcSynthesized?: boolean | null;
   /**
    * API-key id of the credential that performed this state-change, mirroring
@@ -103,7 +103,7 @@ export interface AuditExportEntryInput {
   };
 }
 
-/** Per-key activation/retirement window; drives temporal key-validity (engine ≥ v0.26.x). */
+/** Per-key activation/retirement window; drives temporal key-validity (Server 0.26 and later). */
 export interface SigningKeyWindow {
   activatedAt: string;
   retiredAt: string | null;
@@ -136,7 +136,7 @@ export interface RecordAuditExportInput {
   };
   entries: AuditExportEntryInput[];
   /**
-   * Self-describing verification guidance the engine ships in the export.
+   * Self-describing verification guidance the Server ships in the export.
    * `unsignedFields` lists per-entry fields that are UNSIGNED display projections
    * (e.g. `actorDisplayName`) resolved at export time, not covered by the COSE_Sign1
    * signature. A PASS does NOT vouch for these labels. The attribution the guide
@@ -225,11 +225,11 @@ export interface VerifyExportOptions {
    * the agent sent to `POST /v1/auth/oidc/cert`, which is also the `cnf.jwk`
    * claim inside the returned `certJws`. The export does not carry them.
    *
-   * When an entry's signed payload carries an engine-validated
+   * When an entry's signed payload carries a Server-validated
    * `predicate.on_behalf_of.agent_signature` and its sealed cert thumbprint
    * matches one of these keys, the signature is re-verified offline, proving
    * the cert holder signed that request-body hash without trusting the
-   * engine's word for it. A key is matched only through the thumbprint the
+   * Server's word for it. A key is matched only through the thumbprint the
    * entry signed, so where a key came from does not need to be trusted.
    * Anything that is not an Ed25519 JWK throws `TypeError`.
    */
@@ -285,12 +285,12 @@ export interface VerifyExportResult {
    *   `actorId` / `actorRole` / `actorOwnerId` columns and the envelope carries
    *   the signed actor claim, which is every current export.
    * - `payload_binding`, `oidc_actor` and `key_temporal` flip to `applied`
-   *   when the export wire carries their inputs (engine >= v0.26.x: per-entry
+   *   when the export wire carries their inputs (Server >= v0.26.x: per-entry
    *   `payload` + `entryType`, `actorOidcSynthesized`, `createdAt`, and
    *   `signingKeyWindows` in exportMetadata). Older exports without those
    *   fields stay `skipped_no_input`.
    * - `agent_signature` is `applied` only when `agentKeys` supplied the cert
-   *   key for at least one engine-validated agent signature on the chain.
+   *   key for at least one Server-validated agent signature on the chain.
    *
    * The applicability is surfaced so a caller never mistakes "not checked
    * here" for "checked and passed".
@@ -414,7 +414,7 @@ export function verifyAuditExport(
         })
       : null;
   if (trust !== null) keys = applyKeyTrust(keys, trust);
-  // When the install began signing, for CHAIN_ENTRY_UNSIGNED. The engine reads
+  // When the install began signing, for CHAIN_ENTRY_UNSIGNED. The Server reads
   // it as min(activated_at) over its whole key registry, retired keys included,
   // and `signingKeyWindows` publishes that whole registry. So the instant is
   // taken over every key the verifier holds (with each key's window resolved
@@ -447,7 +447,7 @@ export function verifyAuditExport(
       createdAt: e.createdAt,
     };
     // Binding-integrity: when the export carries the denormalized row `payload`
-    // (engine ≥ v0.26.x), cross-check it against the predicate decoded from the
+    // (Server 0.26 and later), cross-check it against the predicate decoded from the
     // signed bytes, the export's own verificationGuide step 4. The threat is
     // post-export tampering of the human-readable `payload`/`criteria` view: an
     // attacker rewrites `payload` and leaves `coseSign1` intact. The verifier
@@ -661,7 +661,7 @@ function resolveKeys(
       });
     }
   }
-  // Attach activation/retirement windows from exportMetadata (engine ≥ v0.26.x).
+  // Attach activation/retirement windows from exportMetadata (Server 0.26 and later).
   // Older exports omit signingKeyWindows; keys stay without a window and
   // verifyChain reports `key_temporal` as `skipped_no_input`.
   const windows = meta.signingKeyWindows;

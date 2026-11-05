@@ -1,16 +1,18 @@
-// Records the engine's verdicts on the seeded registries of
-// src/__tests__/key-trust-fuzz.ts, and the key document the engine would
-// publish for each (listPublishedSigningKeys: every anchored or vouched key
-// with a row, its window and the statements its entry files under it), for
-// key-trust-engine.test.ts to hold this package's walk to. Run from an
-// agledger-api checkout at the engine the package targets, with that
-// checkout's tsx:
+// Records the Server's verdicts on the seeded registries of
+// src/__tests__/key-trust-fuzz.ts, and the key document the Server would
+// publish for each (every anchored or vouched key with a row, its window and
+// the statements its entry files under it), for key-trust-engine.test.ts to
+// hold this package's walk to. Run from a Server source checkout at the
+// version the package targets, with that checkout's tsx, and pass the path of
+// this script:
 //
-//   cd ~/projects/agledger-api
-//   node_modules/.bin/tsx ~/projects/agledger-verify-core/scripts/record-key-trust-engine.mts [first] [count]
+//   node_modules/.bin/tsx <path-to-this-script> [first] [count]
 //
-// Re-record when the engine's walk changes, and say in the commit which
-// engine sha the verdicts came from.
+// The Server's key-statements module is imported from that checkout's working
+// directory; if its location moves, update the import below.
+//
+// Re-record when the Server's walk changes, and say in the commit which
+// Server revision the verdicts came from.
 import { execFileSync } from 'node:child_process';
 import { writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';

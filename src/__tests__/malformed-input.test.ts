@@ -16,7 +16,7 @@ import {
 } from '../key-statements.js';
 
 /**
- * Row data no engine writes: a nulled, dropped or retyped column. Each one is
+ * Row data no Server writes: a nulled, dropped or retyped column. Each one is
  * a failure code on the entry it sits in, or a statement finding, never a
  * throw out of the walk and never a pass read off a check that was skipped.
  * Every case is a mutation of a real corpus vector.
