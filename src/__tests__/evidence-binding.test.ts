@@ -37,6 +37,8 @@ describe('evidence bodies inlined by ?evidence=true', () => {
       expect(r.brokenAt?.code).toBe('CHAIN_EVIDENCE_BINDING_MISMATCH');
       expect(r.brokenAt?.detail).toContain(String(entry.payload![type === 'DISPUTE_EVIDENCE' ? 'payloadHash' : 'evidenceHash']));
       expect(r.evidenceBinding.failed).toBe(1);
+      // The entry's signature verified before the body was refused, so it still counts toward provenance.
+      expect(r.keyProvenance.supplied + r.keyProvenance.embedded).toBe(r.signatureCoverage.signed);
     });
   }
 
