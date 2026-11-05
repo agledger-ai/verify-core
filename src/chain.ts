@@ -688,7 +688,7 @@ function checkInlinedEvidence(
   counts.present++;
   const failed = (detail: string): ChainEntryResult => {
     counts.failed++;
-    return fail(entry.scopeId, result.position, 'CHAIN_EVIDENCE_BINDING_MISMATCH', detail, result.signature);
+    return failAfterSignature(entry, result, 'CHAIN_EVIDENCE_BINDING_MISMATCH', detail);
   };
   const body = entry.inlinedEvidence!.value;
   if (entry.binding === undefined) {
@@ -736,12 +736,11 @@ function checkSealedFederationWire(
   if (wire === null) return result;
   optionalChecks.federation_wire = 'applied';
   if (wire === 'malformed') {
-    return fail(
-      entry.scopeId,
-      result.position,
+    return failAfterSignature(
+      entry,
+      result,
       'CHAIN_FEDERATION_WIRE_INVALID',
       'payload.wire is present but is not a sealed federation message (an object with scheme, senderHubId, senderPublicKey, recipientHubId, method, path, bodyHash, timestamp, nonce, signature and an object body).',
-      result.signature,
     );
   }
   counts.present++;
@@ -753,12 +752,11 @@ function checkSealedFederationWire(
   }
   if (outcome.outcome === 'unchecked') return result;
   counts.failed++;
-  return fail(
-    entry.scopeId,
-    result.position,
+  return failAfterSignature(
+    entry,
+    result,
     outcome.outcome === 'unsupported' ? 'CHAIN_UNSUPPORTED_ALGORITHM' : 'CHAIN_FEDERATION_WIRE_INVALID',
     outcome.detail,
-    result.signature,
   );
 }
 
@@ -796,22 +794,20 @@ function checkAgentSignature(
   }
   const certLabel = claim.certId ?? claim.certThumbprint;
   if (outcome === 'unsupported') {
-    return fail(
-      entry.scopeId,
-      result.position,
+    return failAfterSignature(
+      entry,
+      result,
       'CHAIN_UNSUPPORTED_ALGORITHM',
       `Agent signature for cert ${certLabel} could not be checked: this host cannot compute Ed25519 (an active OpenSSL FIPS provider carries no EdDSA). Not verified, and not tamper evidence.`,
-      result.signature,
     );
   }
-  return fail(
-    entry.scopeId,
-    result.position,
+  return failAfterSignature(
+    entry,
+    result,
     'CHAIN_AGENT_SIGNATURE_INVALID',
     outcome === 'malformed'
       ? `Sealed agent_signature for cert ${certLabel} has a shape nothing can verify (alg must be EdDSA, content_hash sha256:<hex64>, signature 64 bytes of standard base64).`
       : `Sealed agent_signature for cert ${certLabel} does not verify under the supplied key with thumbprint ${claim.certThumbprint}.`,
-    result.signature,
   );
 }
 
@@ -832,8 +828,18 @@ function fail(
   code: FailureCode,
   detail: string,
   signature: SignatureOutcome['state'] = 'not-checked',
+  keySource?: KeySource,
 ): ChainEntryResult {
-  return { scopeId, position, valid: false, failure: { code, detail }, signature };
+  return { scopeId, position, valid: false, failure: { code, detail }, signature, ...(keySource !== undefined ? { keySource } : {}) };
+}
+
+/**
+ * Fail an entry a check after the signature check refused: it keeps the
+ * signature state and the key it verified under, so `keyProvenance` still
+ * counts every signed entry (`signed = supplied + embedded`).
+ */
+function failAfterSignature(entry: NormalizedEntry, result: ChainEntryResult, code: FailureCode, detail: string): ChainEntryResult {
+  return fail(entry.scopeId, result.position, code, detail, result.signature, result.keySource);
 }
 
 function verifyEntry(
