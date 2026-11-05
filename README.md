@@ -316,13 +316,6 @@ times are not the Server's word.
 this host cannot compute (Ed25519 history on a FIPS host) is `undecided`, and
 entries under it are `CHAIN_UNSUPPORTED_ALGORITHM` rather than unanchored.
 
-## What verification does not prove
-
-- **That the work was good or true.** AGLedger records what was asked, what was submitted and the principal's verdict. It does not inspect deliverable content, and a pass says nothing about it.
-- **That nothing is missing at the ends.** The chain is checked from its first entry to its last. Entries removed from the end, or an export or dump withheld whole, show up only against a signed checkpoint or a copy you already hold.
-- **That a trusted key was never misused.** Anchoring proves each signing key links back to a key you pinned. Whoever holds a trusted key's private half can sign entries that verify. A compromise is accounted for after the fact by distrusting the key (`distrustedKeys`) from the instant it leaked.
-- **Anything, without a trust anchor.** An unanchored pass shows only that the export agrees with the keys it carries itself.
-
 ## Agent signatures
 
 An agent that authenticates with an ephemeral cert can sign each request body
