@@ -356,8 +356,37 @@ import { verifyAuditExport } from '@agledger/verify-core';
 
 const result = verifyAuditExport(exportDocument, { federationKeys: { 'hub-b': 'MCowBQYDK2VwAyEA...' } });
 
-console.log(result.federationWire); // e.g. { present: 2, verified: 2, failed: 0 }
+console.log(result.federationWire); // e.g. { present: 2, verified: 2, failed: 0, afterRetirement: 0 }
 ```
+
+A peer that changed its federation key signed its earlier messages under the
+earlier key. Pass its key history (`GET /.well-known/agledger-federation-keys.json`
+on the peer, no auth) beside the key you pinned for it, and every key the
+history links to the pin through successions both keys signed is trusted
+inside its window:
+
+```ts
+import { verifyAuditExport, type FederationKeyHistoryDocument } from '@agledger/verify-core';
+
+const response = await fetch('https://hub-b.example.com/.well-known/agledger-federation-keys.json');
+const history = (await response.json()) as FederationKeyHistoryDocument;
+
+const result = verifyAuditExport(exportDocument, {
+  federationKeys: [{ hubId: 'hub-b', publicKey: 'MCowBQYDK2VwAyEA...', history }],
+});
+```
+
+The windows come from the signed statements, not the document's `keys`
+summary, and each entry is placed by its `createdAt` on the receiver's chain.
+A message under a key activated after the receiver took it fails. One under a
+key retired before the receiver took it verifies and is counted in
+`federationWire.afterRetirement`: a peer process not yet restarted onto the new
+key sends exactly that, and it is in order when the receiver's
+`federation.peer_revoked` audit row for the peer comes after it. A key behind a
+genesis that named it only by digest (`linked: false`) is not linked to the
+newer keys; name the hub a second time with that key once its operator
+confirms it. A history that is another hub's, carries a statement that does not
+verify, or never reaches the pin throws `TypeError` before anything is verified.
 
 A sealed signature that does not verify, a sealed key that is not the one
 supplied for that hub, a body that no longer hashes to what was signed, or an

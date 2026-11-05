@@ -81,6 +81,7 @@ export type {
   VerificationKeysDocument,
 } from './key-statements.js';
 export {
+  FEDERATION_KEY_STATEMENT_DOMAIN,
   FEDERATION_WIRE_SCHEME,
   buildFederationKeyRegistry,
   canonicalizeJson,
@@ -91,7 +92,10 @@ export {
 } from './federation-wire.js';
 export type {
   FederationKeyEntry,
+  FederationKeyHistoryDocument,
+  FederationKeyHistoryStatement,
   FederationKeyRegistry,
+  FederationTrustedKey,
   FederationWire,
   FederationWireOutcome,
 } from './federation-wire.js';

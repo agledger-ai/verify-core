@@ -365,9 +365,13 @@ export interface ChainResult {
    * checked under a `federationKeys` entry for the sending hub and found good;
    * `failed` counts those that failed a check (a body hash, the entry, or the
    * signature under the key given for the hub). `present - verified - failed`
-   * is the messages from a hub with no key supplied.
+   * is the messages from a hub with no key supplied. `afterRetirement`
+   * counts verified ones sealed under a key the sender's history retired
+   * before the receiver wrote the entry (see `FederationWireOutcome`): in
+   * order when the receiver revoked the peer after them, so check its
+   * `federation.peer_revoked` audit row.
    */
-  federationWire: { present: number; verified: number; failed: number };
+  federationWire: { present: number; verified: number; failed: number; afterRetirement: number };
 }
 
 export interface VerifyChainOptions {
@@ -510,7 +514,7 @@ export function verifyChain(
   };
   const keyProvenance = { supplied: 0, embedded: 0 };
   const agentSignatures = { present: 0, verified: 0 };
-  const federationWire = { present: 0, verified: 0, failed: 0 };
+  const federationWire = { present: 0, verified: 0, failed: 0, afterRetirement: 0 };
   let verifiedEntries = 0;
   let brokenAt: ChainResult['brokenAt'];
   const accounted: AccountedEntry[] = [];
@@ -634,7 +638,7 @@ function checkSealedFederationWire(
   result: ChainEntryResult,
   federationKeys: FederationKeyRegistry | undefined,
   optionalChecks: Record<OptionalCheck, CheckApplicability>,
-  counts: { present: number; verified: number; failed: number },
+  counts: { present: number; verified: number; failed: number; afterRetirement: number },
 ): ChainEntryResult {
   if (entry.binding === undefined) return result;
   const wire = extractFederationWire(entry.binding.payload);
@@ -650,9 +654,10 @@ function checkSealedFederationWire(
     );
   }
   counts.present++;
-  const outcome = checkFederationWire(entry.binding.entryType, entry.binding.recordId, entry.binding.payload, wire, federationKeys);
+  const outcome = checkFederationWire(entry.binding.entryType, entry.binding.recordId, entry.binding.payload, wire, federationKeys, entry.createdAt);
   if (outcome.outcome === 'ok') {
     if (outcome.signatureChecked) counts.verified++;
+    if (outcome.afterRetirement) counts.afterRetirement++;
     return result;
   }
   if (outcome.outcome === 'unchecked') return result;
