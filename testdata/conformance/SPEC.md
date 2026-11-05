@@ -1,24 +1,22 @@
 # AGLedger verifier conformance corpus: contract
 
 This directory is the **anti-drift seam** for AGLedger's offline verifiers. It
-holds known-good and known-tampered fixtures that ARE real engine output, each
+holds known-good and known-tampered fixtures that ARE real Server output, each
 paired with an expected verdict + canonical failure code. Every verifier surface
 (TS `@agledger/verify-core`, the `@agledger/verify` dump verifier, and the
 independent Python `agledger.verify`) runs this corpus in CI. A change to the
-engine wire format bumps the corpus; the verifiers update in lockstep.
+Server wire format bumps the corpus; the verifiers update in lockstep.
 
-**`agledger-api` owns generation** (it owns the contract: wire format + dump
-producer + corpus). The fixtures here are produced by `agledger-api`'s
-`scripts/generate-conformance-corpus.ts`. It boots the real engine, captures
-byte-faithful `/audit-export` JSON and `dump-vault` NDJSON, then applies
-controlled tamper transforms. Regenerate (on a wire-format change) from an
-`agledger-api` checkout with a local Postgres up: `pnpm generate:corpus`. Each
-manifest carries a `provenance` block recording the producing api SHA + version.
-Do NOT hand-edit fixtures; regenerate.
+**The AGLedger Server owns generation.** The fixtures are produced by the
+Server's conformance generator from real Server output: byte-faithful
+`/audit-export` JSON and vault-dump NDJSON, with controlled tamper transforms
+applied to produce one fixture per failure code. The corpus is regenerated on a
+wire-format change, and each manifest's `provenance` block records the Server
+version that produced it. Do NOT hand-edit fixtures; regenerate.
 
-Lesson encoded here (F-682): fixtures MUST mirror the real export/dump shape
-exactly, never a bilingual superset (e.g. carrying both `position` and
-`chainPosition`). A superset masks field-name drift.
+Fixtures MUST mirror the real export and dump shape exactly, never a bilingual
+superset (for example carrying both `position` and `chainPosition`). A superset
+masks field-name drift.
 
 ## Layout
 
@@ -71,7 +69,7 @@ A runner: load each vector of the kind it supports, run the verifier with
 `options`, then assert `expect` and, on fail, that `brokenAt.code ===
 failureCode` (and `brokenAt.position === brokenAt` when given), plus any
 `expectSignatureCoverage`. A runner MUST fail loudly if a `pass` vector fails or
-a `fail` vector passes/returns the wrong code — that is the whole point.
+a `fail` vector passes or returns the wrong code. That is the whole point.
 
 ## Canonical FailureCode taxonomy
 
@@ -143,8 +141,8 @@ an unsigned chain (all-zero 64-byte sig) that PASSES with
 `expectSignatureCoverage {signed:0, unsigned:N}` (proves unsigned is reported as
 hash-chain-only, never as cryptographically signed).
 
-**Dump** (`manifest-dump.json`): valid; `CHAIN_EMPTY` (empty/truncated vault —
-the fail-closed fix); `CHECKPOINT_ROW_MISSING`; `CHECKPOINT_HASH_MISMATCH`;
+**Dump** (`manifest-dump.json`): valid; `CHAIN_EMPTY` (an empty or truncated vault,
+which fails closed); `CHECKPOINT_ROW_MISSING`; `CHECKPOINT_HASH_MISMATCH`;
 `CHAIN_PAYLOAD_BINDING_MISMATCH`; `CHAIN_OIDC_ACTOR_MISMATCH`; `CHAIN_KEY_EXPIRED`
-(entry signed outside the key's activated..retired window — the retired-key
-fail-open fix); `TENANT_CHECKPOINT_ROOT_MISMATCH`; `TENANT_CHECKPOINT_FORK`.
+(an entry signed outside the key's activated..retired window, which
+fails closed after retirement); `TENANT_CHECKPOINT_ROOT_MISMATCH`; `TENANT_CHECKPOINT_FORK`.
