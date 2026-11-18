@@ -286,7 +286,15 @@ and, once its chains are walked, settles it with
 verified: with none, the status becomes `no_anchored_signature`.
 `writtenWhileSigning(rowTime, signingSince)` is the unsigned-row rule for
 checkpoints and read-log rows, and fails closed on a row with no readable time
-once signing began.
+once signing began. `placeInKeyWindow(key, rowTime, 'Checkpoint')` holds a
+vault checkpoint, a read-log leaf or a read-log tree head to the signed window
+of its key by the rule entries are held to (`inside`, `not-yet-active`,
+`expired`, `accounted`, or `unplaceable` when a time cannot be read), and
+`distrustAccounts(key, rowTime)` says whether a `distrustedKeys` entry and the
+trusted retirement account for it. Verify the signature first: an artifact
+that is accounted for is set aside only when its signature verifies under the
+key, and a signature that does not verify is reported ahead of a window
+finding.
 
 A dump row repeating an earlier row's signed payload counts once, at its
 first write: a row copied in the database under a new id and time says
@@ -388,9 +396,13 @@ The windows come from the signed statements, not the document's `keys`
 summary. Each message is placed by its sealed `wire.timestamp`, which the peer
 signed and the receiver sealed under its own signature, and which comes from
 the peer's clock, the same clock its windows are written by. The entry's
-`createdAt` is not signed, so it places nothing. A message signed under a key
-before that key's activation fails. One signed under a key after the key's
-retirement verifies and is counted in `federationWire.afterRetirement`: a peer
+`createdAt` is not signed, so it places nothing. The timestamp is the signing
+process's clock and the window is the peer's database clock, so each edge
+carries an allowance of 300 seconds (`FEDERATION_KEY_WINDOW_SKEW_MS`), as the
+Server's own receiver guidance gives it. A message signed under a key more
+than that before the key's activation fails. One signed under a key more than
+that after the key's retirement verifies and is counted in
+`federationWire.afterRetirement`: a peer
 process not yet restarted onto the new key sends exactly that, and it is in
 order when the receiver's `federation.peer_revoked` audit row for the peer
 comes after it. A key behind a genesis that named it only by digest

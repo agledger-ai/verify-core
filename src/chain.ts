@@ -1288,6 +1288,7 @@ function checkOidcActor(
 function temporalKeyFailure(
   createdAt: string,
   key: VerificationKey,
+  what = 'Entry',
 ): { code: 'CHAIN_KEY_NOT_YET_ACTIVE' | 'CHAIN_KEY_EXPIRED'; detail: string } | null {
   const written = rfc3339Ms(createdAt);
   if (Number.isNaN(written)) return null;
@@ -1296,7 +1297,7 @@ function temporalKeyFailure(
     if (!Number.isNaN(activated) && written < activated) {
       return {
         code: 'CHAIN_KEY_NOT_YET_ACTIVE',
-        detail: `Entry written ${createdAt} predates key ${key.keyId} activation ${key.activatedAt}.`,
+        detail: `${what} written ${createdAt} predates key ${key.keyId} activation ${key.activatedAt}.`,
       };
     }
   }
@@ -1305,7 +1306,7 @@ function temporalKeyFailure(
     if (!Number.isNaN(cutoff) && written > cutoff) {
       return {
         code: 'CHAIN_KEY_EXPIRED',
-        detail: `Entry written ${createdAt} postdates ${key.distrustCutoff}, the instant distrustedKeys (VAULT_DISTRUSTED_KEYS on the Server) gives for key ${key.keyId}; the key was not retired then.`,
+        detail: `${what} written ${createdAt} postdates ${key.distrustCutoff}, the instant distrustedKeys (VAULT_DISTRUSTED_KEYS on the Server) gives for key ${key.keyId}; the key was not retired then.`,
       };
     }
   }
@@ -1314,9 +1315,78 @@ function temporalKeyFailure(
     if (!Number.isNaN(retired) && written > retired) {
       return {
         code: 'CHAIN_KEY_EXPIRED',
-        detail: `Entry written ${createdAt} postdates key ${key.keyId} retirement ${key.retiredAt}.`,
+        detail: `${what} written ${createdAt} postdates key ${key.keyId} retirement ${key.retiredAt}.`,
       };
     }
   }
   return null;
+}
+
+/**
+ * Where a signed artifact other than a chain entry falls against the window
+ * of the key that signed it. `inside`: the key's window covers its write time,
+ * or the key carries no window. `accounted`: it was written at or after the
+ * instant `distrustedKeys` gives for the key and before a key the walk trusts
+ * retired it. `not-yet-active` and `expired`: outside the window. `unplaceable`:
+ * the write time or a window edge is not an RFC 3339 instant, so the artifact
+ * cannot be placed and the caller fails closed.
+ */
+export type KeyWindowPlacement =
+  | { placement: 'inside' | 'accounted' }
+  | { placement: 'not-yet-active' | 'expired' | 'unplaceable'; detail: string };
+
+/**
+ * Place a vault checkpoint, a read-log leaf or a read-log tree head in the
+ * signed window of its key, by the time its row was written. The rule is the
+ * one chain entries are held to (CHAIN_KEY_NOT_YET_ACTIVE, CHAIN_KEY_EXPIRED):
+ * each edge is checked only when the key carries it, at millisecond
+ * precision, and an artifact written exactly at the key's retirement is
+ * inside. `what` names the artifact in the detail ("Checkpoint", "Leaf").
+ *
+ * The caller verifies the signature first: the Server reports a signature
+ * that does not verify ahead of a window finding.
+ */
+export function placeInKeyWindow(key: VerificationKey, writtenAt: unknown, what: string): KeyWindowPlacement {
+  if (typeof key.activatedAt !== 'string' && typeof key.retiredAt !== 'string' && typeof key.distrustCutoff !== 'string') {
+    return { placement: 'inside' };
+  }
+  for (const [edge, value] of [['activatedAt', key.activatedAt], ['retiredAt', key.retiredAt], ['distrustCutoff', key.distrustCutoff]] as const) {
+    if (typeof value === 'string' && !isInstant(value)) {
+      return { placement: 'unplaceable', detail: `Key ${key.keyId}'s ${edge} ${JSON.stringify(value)} is not an RFC 3339 instant, so the ${what.toLowerCase()} cannot be placed inside its window.` };
+    }
+  }
+  if (!isInstant(writtenAt)) {
+    return { placement: 'unplaceable', detail: `${what} has no parseable write time, so it cannot be placed inside key ${key.keyId}'s window.` };
+  }
+  const temporal = temporalKeyFailure(writtenAt, key, what);
+  if (temporal === null) return { placement: 'inside' };
+  const span = key.distrustSpan;
+  const written = rfc3339Ms(writtenAt);
+  if (temporal.code === 'CHAIN_KEY_EXPIRED' && span !== undefined && span.cutoff !== null && span.retiredAt !== null
+    && written >= instantMs(span.cutoff) && written < instantMs(span.retiredAt)) {
+    return { placement: 'accounted' };
+  }
+  return { placement: temporal.code === 'CHAIN_KEY_EXPIRED' ? 'expired' : 'not-yet-active', detail: temporal.detail };
+}
+
+/**
+ * Whether a `distrustedKeys` entry and the retirement a trusted key signed
+ * account for an artifact signed under `key` and written at `writtenAt`: the
+ * key is unanchored only because of the entry, or anchored and the artifact
+ * written at or after the entry's instant, and in both cases the artifact was
+ * written before that retirement. The same condition lists a chain entry as
+ * CHAIN_SIGNED_BY_DISTRUSTED_KEY.
+ *
+ * Such an artifact is listed, never verified, and never evidence for or
+ * against anything else. The caller still verifies its signature under the
+ * key before setting it aside: anything else under the key's id is bytes
+ * whoever writes to the database wrote.
+ */
+export function distrustAccounts(key: VerificationKey, writtenAt: unknown): boolean {
+  if (key.trust === 'undecided' || declaredAlgorithmLies(key)) return false;
+  if (key.trust === 'unanchored') {
+    const bound = key.distrustSpan?.retiredAt ?? null;
+    return bound !== null && isInstant(writtenAt) && rfc3339Ms(writtenAt) < instantMs(bound);
+  }
+  return placeInKeyWindow(key, writtenAt, 'Artifact').placement === 'accounted';
 }
