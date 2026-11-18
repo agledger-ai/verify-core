@@ -101,6 +101,12 @@ cannot turn a check off without a word.
   `result.evidenceBinding` counts them. An encrypted-mode completion signs a
   hash over a cleartext the export does not carry, so its ciphertext is counted
   as `clientHashed`, not re-bound.
+- **The chain's length**, against the two counts the export states: fewer
+  entries than `exportMetadata.expectedEntries` (the position of the record's
+  latest checkpoint) fails `CHECKPOINT_ROW_MISSING`, and fewer than
+  `exportMetadata.totalEntries` (what the Server wrote) fails
+  `CHAIN_POSITION_GAP`. `result.entryCount` reports both, each null when the
+  export does not state it.
 
 The payload, OIDC, attribution and key-window checks run when the export
 carries their inputs, which every current Server does. The result's `optionalChecks` says

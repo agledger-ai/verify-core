@@ -156,11 +156,13 @@ describe('rule 2: an unsigned entry written once the install signs', () => {
     const at = validAllNulled();
     delete at.exportMetadata.signingKeyWindows;
     at.entries.splice(1);
+    at.exportMetadata.totalEntries = 1;
     at.exportMetadata.signingKeyWindows = { k: { activatedAt: created, retiredAt: null } };
     expect(verifyAuditExport(at).brokenAt).toMatchObject({ position: 1, code: 'CHAIN_ENTRY_UNSIGNED' });
 
     const before = validAllNulled();
     before.entries.splice(1);
+    before.exportMetadata.totalEntries = 1;
     before.exportMetadata.signingKeyWindows = { k: { activatedAt: shiftMs(created, 1), retiredAt: null } };
     expect(verifyAuditExport(before).valid).toBe(true);
   });

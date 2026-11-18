@@ -123,6 +123,14 @@ export interface RecordAuditExportInput {
     recordId: string;
     exportFormatVersion?: string;
     canonicalization?: string;
+    /** How many entries the Server wrote into this export. */
+    totalEntries?: number;
+    /**
+     * Position of the record's latest signed checkpoint, or null when no
+     * checkpoint has been written for it yet. The chain is held to it: fewer
+     * entries than this is CHECKPOINT_ROW_MISSING.
+     */
+    expectedEntries?: number | null;
     signingPublicKeys?: Record<string, string>;
     /** keyId → activation/retirement window, the values the key statements sign. */
     signingKeyWindows?: Record<string, SigningKeyWindow>;
@@ -341,6 +349,16 @@ export interface VerifyExportResult {
    */
   evidenceBinding: EvidenceBindingCounts;
   /**
+   * The entry counts the export states, which the chain is held to.
+   * `expectedEntries` is the position of the record's latest checkpoint
+   * (null when the export names none) and `statedEntries` the number of
+   * entries the Server wrote into the export (null when it does not say).
+   * Fewer entries than `expectedEntries` fails CHECKPOINT_ROW_MISSING, and
+   * fewer than `statedEntries` fails CHAIN_POSITION_GAP. With both null the
+   * entry count is the file's own and is held to nothing.
+   */
+  entryCount: { expectedEntries: number | null; statedEntries: number | null };
+  /**
    * `trusted`, `unanchored` or `failed` (see `Verdict`). Read this rather
    * than `valid` alone: a valid result with no `trustAnchors`, or none that
    * anchored a signature, is `unanchored`, which is not a trusted verdict.
@@ -508,13 +526,14 @@ export function verifyAuditExport(
   // A finding on the key statements has no chain position; it is reported
   // at position 0, the place for findings that precede the walk.
   const registryFinding = keyTrust.findings[0];
+  const count = statedEntryCount(meta, entries.length);
   const brokenAt = chain.brokenAt
     ? { position: chain.brokenAt.position, code: chain.brokenAt.code, detail: chain.brokenAt.detail }
     : registryFinding
       ? { position: 0, code: registryFinding.code, detail: registryFinding.detail }
-      : undefined;
+      : count.finding;
 
-  const valid = chain.valid && keyTrust.findings.length === 0;
+  const valid = chain.valid && keyTrust.findings.length === 0 && count.finding === undefined;
   return {
     valid,
     totalEntries: chain.totalEntries,
@@ -535,9 +554,64 @@ export function verifyAuditExport(
     agentSignatures: chain.agentSignatures,
     federationWire: chain.federationWire,
     evidenceBinding: chain.evidenceBinding,
+    entryCount: count.entryCount,
     keyTrust,
     verdict: verdictOf({ valid, keyTrust }),
   };
+}
+
+/**
+ * Hold the chain's length to the counts the export states. A chain that was
+ * cut from the end still links and verifies entry by entry, so its length is
+ * the only thing that shows the cut: against the latest checkpoint position
+ * (Server `audit_vault_row_missing_for_checkpoint`) and against the number of
+ * entries the Server wrote. A count that is present and is not a non-negative
+ * integer is refused rather than skipped.
+ */
+function statedEntryCount(
+  meta: RecordAuditExportInput['exportMetadata'],
+  held: number,
+): { entryCount: VerifyExportResult['entryCount']; finding?: NonNullable<VerifyExportResult['brokenAt']> } {
+  const read = (name: 'expectedEntries' | 'totalEntries'): number | null | 'malformed' => {
+    const value: unknown = meta[name];
+    if (value === undefined || value === null) return null;
+    return typeof value === 'number' && Number.isInteger(value) && value >= 0 ? value : 'malformed';
+  };
+  const expected = read('expectedEntries');
+  const stated = read('totalEntries');
+  const entryCount = {
+    expectedEntries: expected === 'malformed' ? null : expected,
+    statedEntries: stated === 'malformed' ? null : stated,
+  };
+  for (const [name, value] of [['expectedEntries', expected], ['totalEntries', stated]] as const) {
+    if (value === 'malformed') {
+      return {
+        entryCount,
+        finding: { position: 0, code: 'UNSUPPORTED_FORMAT', detail: `exportMetadata.${name} is ${JSON.stringify(meta[name])}, not a non-negative integer or null, so the chain's length cannot be held to it.` },
+      };
+    }
+  }
+  if (entryCount.expectedEntries !== null && held < entryCount.expectedEntries) {
+    return {
+      entryCount,
+      finding: {
+        position: entryCount.expectedEntries,
+        code: 'CHECKPOINT_ROW_MISSING',
+        detail: `The export states a signed checkpoint at position ${entryCount.expectedEntries} and carries ${held} ${held === 1 ? 'entry' : 'entries'}: the chain was cut below its checkpoint.`,
+      },
+    };
+  }
+  if (entryCount.statedEntries !== null && held < entryCount.statedEntries) {
+    return {
+      entryCount,
+      finding: {
+        position: held + 1,
+        code: 'CHAIN_POSITION_GAP',
+        detail: `The export states ${entryCount.statedEntries} entries and carries ${held}: entries were removed from the end after the Server wrote it.`,
+      },
+    };
+  }
+  return { entryCount };
 }
 
 const EXPORT_OPTIONS = ['publicKeys', 'requireKeyId', 'requireSuppliedKeys', 'trustAnchors', 'distrustedKeys', 'agentKeys', 'federationKeys'] as const satisfies ReadonlyArray<keyof VerifyExportOptions>;
@@ -627,6 +701,7 @@ function earlyFailure(recordId: string, totalEntries: number, detail: string): V
     agentSignatures: { present: 0, verified: 0 },
     federationWire: { present: 0, verified: 0, failed: 0, afterRetirement: 0 },
     evidenceBinding: { present: 0, verified: 0, clientHashed: 0, failed: 0 },
+    entryCount: { expectedEntries: null, statedEntries: null },
     keyTrust: reportKeyTrust(new Map(), null, null),
     verdict: 'failed',
   };
