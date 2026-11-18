@@ -6,8 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ## [Unreleased]
 
+### Added
+
+- **The key window and the distrust rule for checkpoints and the read log (`placeInKeyWindow`, `distrustAccounts`).** An AGLedger Server later than 2.2.0 holds a vault checkpoint, a read-log leaf and a read-log tree head to the signed window of the key that signed it, by the time its row was written, and sets aside the ones a `VAULT_DISTRUSTED_KEYS` entry and the trusted retirement account for. `placeInKeyWindow(key, writtenAt, what)` places such an artifact by the rule `CHAIN_KEY_NOT_YET_ACTIVE` and `CHAIN_KEY_EXPIRED` apply to entries: each edge checked only when the key carries it, an artifact written exactly at the retirement inside, and one whose time cannot be read reported as `unplaceable`. `distrustAccounts(key, writtenAt)` is the condition that lists a chain entry as `CHAIN_SIGNED_BY_DISTRUSTED_KEY`, for any signed artifact. Eight failure codes join the taxonomy for a dump verifier to report: `CHECKPOINT_KEY_NOT_YET_ACTIVE`, `CHECKPOINT_KEY_EXPIRED`, `TENANT_READ_KEY_NOT_YET_ACTIVE`, `TENANT_READ_KEY_EXPIRED`, `TENANT_CHECKPOINT_KEY_NOT_YET_ACTIVE`, `TENANT_CHECKPOINT_KEY_EXPIRED`, `CHECKPOINT_ACCOUNTED_ONLY` (a chain with no entry whose only checkpoints are set aside) and `CHECKPOINT_ACCOUNTED_RUN_EXCEEDED` (more than 1000 set-aside checkpoints above the newest one that is not).
+
 ### Changed
 
+- **A sealed federation message is placed in its key's window with 300 seconds allowed at each edge (`FEDERATION_KEY_WINDOW_SKEW_MS`).** `wire.timestamp` is the clock of the process that signed the message and the window's edges are the peer's database clock, and the Server's receiver guidance allows 300 seconds between them. A message signed within that of a key change was failed (before the activation) or counted in `federationWire.afterRetirement` (after the retirement); it now verifies on the key it names, and only a message further out fails or is counted.
+- `cborg` is pinned at 7.0.0, the version the Server encodes with. Everything this package encodes is byte-identical under both. One decode differs: 6.1.3 dropped a U+FEFF at the start of a text string and 7.0.0 keeps it, so a signed payload string that begins with one no longer fails `CHAIN_PAYLOAD_BINDING_MISMATCH` against its row.
 - Documentation and code comments describe the Server's behaviour rather than its internals.
 
 ## [2.1.0] - 2026-11-05

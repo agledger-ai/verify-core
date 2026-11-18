@@ -446,6 +446,14 @@ const FIELD_PAIRS: Readonly<Record<string, ReadonlyArray<readonly [string, strin
 };
 
 /**
+ * The allowance at both edges of a federation key's window, as the Server's
+ * receiver recipe gives it. `wire.timestamp` is the clock of the process that
+ * signed the message and the window's edges are the sender's database clock,
+ * so a message signed within this of a key change is on the right key.
+ */
+export const FEDERATION_KEY_WINDOW_SKEW_MS = 300_000;
+
+/**
  * Check one sealed message against the entry that carries it, and under the
  * sender's key when `keys` has one for `wire.senderHubId`.
  *
@@ -455,7 +463,8 @@ const FIELD_PAIRS: Readonly<Record<string, ReadonlyArray<readonly [string, strin
  * keys came with a history, the message is placed in a key's window by
  * `wire.timestamp`: the sender signed it, the receiver sealed it under its own
  * signature after holding it to its clock-skew allowance, and it is read from
- * the sender's clock, the clock the history's windows are written by. The
+ * the sender's clock, the clock the history's windows are written by, with
+ * {@link FEDERATION_KEY_WINDOW_SKEW_MS} allowed at each edge. The
  * entry's `createdAt` is a column no signature covers, so it places nothing.
  */
 export function checkFederationWire(
@@ -510,13 +519,13 @@ export function checkFederationWire(
     if (Number.isNaN(at)) {
       return { outcome: 'invalid', detail: `Sealed message from ${wire.senderHubId} carries timestamp ${JSON.stringify(wire.timestamp)}, which is not an RFC 3339 instant, so it cannot be placed in its key's window.` };
     }
-    if (key.activatedAt !== null && at < rfc3339Ms(key.activatedAt)) {
+    if (key.activatedAt !== null && at < rfc3339Ms(key.activatedAt) - FEDERATION_KEY_WINDOW_SKEW_MS) {
       return {
         outcome: 'invalid',
-        detail: `Sealed message from ${wire.senderHubId} is signed at ${wire.timestamp} under a federation key its history activates at ${key.activatedAt}, after the sender signed it.`,
+        detail: `Sealed message from ${wire.senderHubId} is signed at ${wire.timestamp} under a federation key its history activates at ${key.activatedAt}, more than ${FEDERATION_KEY_WINDOW_SKEW_MS / 1000}s after the sender signed it.`,
       };
     }
-    afterRetirement = key.retiredAt !== null && at > rfc3339Ms(key.retiredAt);
+    afterRetirement = key.retiredAt !== null && at > rfc3339Ms(key.retiredAt) + FEDERATION_KEY_WINDOW_SKEW_MS;
   }
   const ed25519 = algorithmByName('Ed25519');
   if (ed25519 === null || !runtimeCanCompute(ed25519)) {

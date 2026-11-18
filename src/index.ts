@@ -11,7 +11,9 @@ export {
   buildAgentKeyRegistry,
   buildKeyRegistry,
   chainOfScope,
+  distrustAccounts,
   earliestKeyActivation,
+  placeInKeyWindow,
   verifyChain,
   writtenWhileSigning,
 } from './chain.js';
@@ -21,6 +23,7 @@ export type {
   AgentKeyRegistry,
   KeySource,
   KeyTrustState,
+  KeyWindowPlacement,
   VerificationKey,
   KeyRegistry,
   NormalizedEntry,
@@ -90,6 +93,7 @@ export {
   extractFederationWire,
   federationSignInput,
   normalizeFederationKey,
+  FEDERATION_KEY_WINDOW_SKEW_MS,
 } from './federation-wire.js';
 export type {
   FederationKeyEntry,

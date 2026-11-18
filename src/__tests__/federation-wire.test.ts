@@ -300,26 +300,49 @@ describe('a sealed federation message under a key the sender has since changed',
     expect(r.brokenAt?.detail).toMatch(/agledger-federation-keys\.json/);
   });
 
-  it('fails a message signed under a key before the key was activated', () => {
-    const r = verifyAuditExport(exportUnder(k('K2'), '2026-11-05T04:22:01.000Z'), {
+  // K2 is activated, and K1 retired, at 04:22:03.323630Z. The signing
+  // process's clock and the sender's database clock may differ, so each edge
+  // carries FEDERATION_KEY_WINDOW_SKEW_MS (300 s).
+  it('fails a message signed under a key more than the allowance before the key was activated', () => {
+    const r = verifyAuditExport(exportUnder(k('K2'), '2026-11-05T04:17:03.322Z'), {
       federationKeys: [{ hubId: hub, publicKey: k('K3').publicKey, history: succession }],
     });
     expect(r.valid).toBe(false);
     expect(r.brokenAt?.detail).toMatch(/activates at 2026-11-05T04:22:03\.323630Z/);
   });
 
-  it('verifies but counts a message signed under a key after the key was retired', () => {
-    const r = verifyAuditExport(exportUnder(k('K1'), '2026-11-05T04:22:05.000Z'), {
+  it('verifies a message signed under a key within the allowance before its activation', () => {
+    for (const signedAt of ['2026-11-05T04:22:01.000Z', '2026-11-05T04:17:03.323Z']) {
+      const r = verifyAuditExport(exportUnder(k('K2'), signedAt), {
+        federationKeys: [{ hubId: hub, publicKey: k('K3').publicKey, history: succession }],
+      });
+      expect(r.valid).toBe(true);
+      expect(r.federationWire).toEqual({ present: 1, verified: 1, failed: 0, afterRetirement: 0 });
+    }
+  });
+
+  it('verifies but counts a message signed under a key more than the allowance after the key was retired', () => {
+    const r = verifyAuditExport(exportUnder(k('K1'), '2026-11-05T04:27:03.324Z'), {
       federationKeys: [{ hubId: hub, publicKey: k('K3').publicKey, history: succession }],
     });
     expect(r.valid).toBe(true);
     expect(r.federationWire).toEqual({ present: 1, verified: 1, failed: 0, afterRetirement: 1 });
   });
 
+  it('does not count a message signed within the allowance after its key was retired', () => {
+    for (const signedAt of ['2026-11-05T04:22:05.000Z', '2026-11-05T04:27:03.323Z']) {
+      const r = verifyAuditExport(exportUnder(k('K1'), signedAt), {
+        federationKeys: [{ hubId: hub, publicKey: k('K3').publicKey, history: succession }],
+      });
+      expect(r.valid).toBe(true);
+      expect(r.federationWire).toEqual({ present: 1, verified: 1, failed: 0, afterRetirement: 0 });
+    }
+  });
+
   it('reads windows from the signed statements, never from the unsigned keys summary', () => {
     const doctored = structuredClone(succession) as FederationKeyHistoryDocument & { keys: Array<{ activatedAt: string | null }> };
     for (const key of doctored.keys) key.activatedAt = null;
-    const r = verifyAuditExport(exportUnder(k('K2'), '2026-11-05T04:22:01.000Z'), {
+    const r = verifyAuditExport(exportUnder(k('K2'), '2026-11-05T04:16:00.000Z'), {
       federationKeys: [{ hubId: hub, publicKey: k('K3').publicKey, history: doctored }],
     });
     expect(r.valid).toBe(false);

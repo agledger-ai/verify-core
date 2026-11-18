@@ -59,6 +59,20 @@
  *                                TENANT_CHECKPOINT_KEY_UNANCHORED for the
  *                                Server's `checkpoint_key_unanchored` and
  *                                `leaf_key_unanchored`.
+ *   - CHECKPOINT_KEY_NOT_YET_ACTIVE, CHECKPOINT_KEY_EXPIRED, and the
+ *     TENANT_READ_KEY_* and TENANT_CHECKPOINT_KEY_* pairs  Server mirror of
+ *                                `checkpoint_key_not_yet_active`,
+ *                                `checkpoint_key_expired`, `leaf_key_not_yet_active`
+ *                                and `leaf_key_expired`: a vault checkpoint, a
+ *                                read-log leaf or a read-log tree head written
+ *                                outside its signing key's signed window, by
+ *                                the rule CHAIN_KEY_NOT_YET_ACTIVE and
+ *                                CHAIN_KEY_EXPIRED apply to entries.
+ *   - CHECKPOINT_ACCOUNTED_ONLY, CHECKPOINT_ACCOUNTED_RUN_EXCEEDED  Server mirror
+ *                                of `accounted_checkpoint_only` and
+ *                                `checkpoint_accounted_run_exceeded`: what a
+ *                                chain is left with when the checkpoints a
+ *                                distrustedKeys entry accounts for are set aside.
  *   - KEY_STATEMENT_INVALID, KEY_CLOSURE_INVALID, CHAIN_KEY_WINDOW_DRIFT
  *                                Server mirrors of the key registry findings
  *                                `key_statement_invalid`, `key_closure_invalid`
@@ -120,6 +134,10 @@ export type FailureCode =
   | 'CHECKPOINT_UNSIGNED'
   | 'CHECKPOINT_KEY_UNANCHORED'
   | 'CHECKPOINT_CLAIM_MISMATCH'
+  | 'CHECKPOINT_KEY_NOT_YET_ACTIVE'
+  | 'CHECKPOINT_KEY_EXPIRED'
+  | 'CHECKPOINT_ACCOUNTED_ONLY'
+  | 'CHECKPOINT_ACCOUNTED_RUN_EXCEEDED'
   // --- org_admin_reads Merkle log + STH ---
   | 'TENANT_READ_LEAF_HASH_MISMATCH'
   | 'TENANT_READ_LEAF_INDEX_GAP'
@@ -127,12 +145,16 @@ export type FailureCode =
   | 'TENANT_READ_LEAF_UNSIGNED'
   | 'TENANT_READ_KEY_UNANCHORED'
   | 'TENANT_READ_CLAIM_MISMATCH'
+  | 'TENANT_READ_KEY_NOT_YET_ACTIVE'
+  | 'TENANT_READ_KEY_EXPIRED'
   | 'TENANT_CHECKPOINT_LEAF_COUNT_MISMATCH'
   | 'TENANT_CHECKPOINT_ROOT_MISMATCH'
   | 'TENANT_CHECKPOINT_SIGNATURE_INVALID'
   | 'TENANT_CHECKPOINT_UNSIGNED'
   | 'TENANT_CHECKPOINT_KEY_UNANCHORED'
   | 'TENANT_CHECKPOINT_CLAIM_MISMATCH'
+  | 'TENANT_CHECKPOINT_KEY_NOT_YET_ACTIVE'
+  | 'TENANT_CHECKPOINT_KEY_EXPIRED'
   | 'TENANT_CHECKPOINT_FORK'
   // --- vault key statements ---
   | 'KEY_STATEMENT_INVALID'
@@ -207,6 +229,14 @@ const SUGGESTIONS: Record<FailureCode, string> = {
     'A vault checkpoint is signed by a key that no signed key statement links to a trust anchor you pinned. Nothing it anchors can be trusted; treat it as forged (see CHAIN_SIGNING_KEY_UNANCHORED).',
   CHECKPOINT_CLAIM_MISMATCH:
     'The claim signed inside a vault checkpoint envelope does not decode, or says something the checkpoint row\'s columns do not (chain position, chain tip hash, subject digest or signed kid). A column was rewritten beside an intact envelope. Trust the signed claim, treat the checkpoint row as tampered, and obtain the dump from the operator again.',
+  CHECKPOINT_KEY_NOT_YET_ACTIVE:
+    'A vault checkpoint was written before the activation its signing key\'s statements sign. A checkpoint backdated under a later key, or a key used before its succession was recorded: treat what it anchors as unproven and compare with the Server\'s own scan (checkpoint_key_not_yet_active).',
+  CHECKPOINT_KEY_EXPIRED:
+    'A vault checkpoint was written after its signing key was retired, or after the instant distrustedKeys gives for that key; the detail says which. Possible use of a compromised key: check the rotation record for that key id, and treat what the checkpoint anchors as unproven.',
+  CHECKPOINT_ACCOUNTED_ONLY:
+    'A chain has no entry in the dump, and its only checkpoints are ones a distrustedKeys entry accounts for. Nothing vouches for the chain and nothing explains its absence: a chain is never empty once written. Obtain the chain from a backup or replica and escalate to the operator (Server scan: accounted_checkpoint_only).',
+  CHECKPOINT_ACCOUNTED_RUN_EXCEEDED:
+    'More than 1000 checkpoints a distrustedKeys entry accounts for sit above the newest checkpoint that entry does not cover. A rotation writes a fresh checkpoint at the next tip, so a run this long is rows planted under the leaked key. Treat the chain as unanchored and escalate to the operator (Server scan: checkpoint_accounted_run_exceeded).',
   TENANT_READ_LEAF_HASH_MISMATCH:
     'An org_admin_reads leaf_hash does not match the RFC 9162 leaf hash of its envelope, sha256(0x00 || cose_sign1). The read-log leaf was altered after recording.',
   TENANT_READ_LEAF_INDEX_GAP:
@@ -219,6 +249,10 @@ const SUGGESTIONS: Record<FailureCode, string> = {
     'An org_admin_reads leaf is signed by a key that no signed key statement links to a trust anchor you pinned. Treat the leaf as forged (see CHAIN_SIGNING_KEY_UNANCHORED).',
   TENANT_READ_CLAIM_MISMATCH:
     'The claim signed inside an org_admin_reads leaf envelope does not decode, or says something the leaf row\'s columns do not (position, previous_hash, record_id or subject digest). A column was rewritten beside an intact envelope. Trust the signed claim and treat the read-log leaf as tampered.',
+  TENANT_READ_KEY_NOT_YET_ACTIVE:
+    'An org_admin_reads leaf was written before the activation its signing key\'s statements sign. Treat the leaf as backdated or forged and compare with the Server\'s own scan (leaf_key_not_yet_active).',
+  TENANT_READ_KEY_EXPIRED:
+    'An org_admin_reads leaf was written after its signing key was retired, or after the instant distrustedKeys gives for that key; the detail says which. Possible use of a compromised key: check the rotation record for that key id.',
   TENANT_CHECKPOINT_LEAF_COUNT_MISMATCH:
     'A signed tree head commits to more leaves than the dump contains. The read log was truncated below a checkpoint.',
   TENANT_CHECKPOINT_ROOT_MISMATCH:
@@ -231,6 +265,10 @@ const SUGGESTIONS: Record<FailureCode, string> = {
     'An org_admin_reads signed tree head is signed by a key that no signed key statement links to a trust anchor you pinned. Treat it as forged (see CHAIN_SIGNING_KEY_UNANCHORED).',
   TENANT_CHECKPOINT_CLAIM_MISMATCH:
     'The claim signed inside an org_admin_reads tree-head envelope does not decode, or says something the tree-head row\'s columns do not (position, chain_tip_hash, leaf count, subject digest or signed kid). A column was rewritten beside an intact envelope. Trust the signed claim and treat the tree-head row as tampered.',
+  TENANT_CHECKPOINT_KEY_NOT_YET_ACTIVE:
+    'An org_admin_reads signed tree head was written before the activation its signing key\'s statements sign. Treat the tree head as backdated or forged and compare with the Server\'s own scan (checkpoint_key_not_yet_active).',
+  TENANT_CHECKPOINT_KEY_EXPIRED:
+    'An org_admin_reads signed tree head was written after its signing key was retired, or after the instant distrustedKeys gives for that key; the detail says which. Possible use of a compromised key: check the rotation record for that key id.',
   TENANT_CHECKPOINT_FORK:
     'Two signed tree heads at the same tree_size carry different roots. This is a Server fork or signing-key compromise. Escalate immediately.',
   KEY_STATEMENT_INVALID:
