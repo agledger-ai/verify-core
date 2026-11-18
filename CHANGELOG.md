@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ## [Unreleased]
 
+## [2.2.0] - 2026-11-18
+
 ### Added
 
 - **The key window and the distrust rule for checkpoints and the read log (`placeInKeyWindow`, `distrustAccounts`).** An AGLedger Server later than 2.2.0 holds a vault checkpoint, a read-log leaf and a read-log tree head to the signed window of the key that signed it, by the time its row was written, and sets aside the ones a `VAULT_DISTRUSTED_KEYS` entry and the trusted retirement account for. `placeInKeyWindow(key, writtenAt, what)` places such an artifact by the rule `CHAIN_KEY_NOT_YET_ACTIVE` and `CHAIN_KEY_EXPIRED` apply to entries: each edge checked only when the key carries it, an artifact written exactly at the retirement inside, and one whose time cannot be read reported as `unplaceable`. `distrustAccounts(key, writtenAt)` is the condition that lists a chain entry as `CHAIN_SIGNED_BY_DISTRUSTED_KEY`, for any signed artifact. Eight failure codes join the taxonomy for a dump verifier to report: `CHECKPOINT_KEY_NOT_YET_ACTIVE`, `CHECKPOINT_KEY_EXPIRED`, `TENANT_READ_KEY_NOT_YET_ACTIVE`, `TENANT_READ_KEY_EXPIRED`, `TENANT_CHECKPOINT_KEY_NOT_YET_ACTIVE`, `TENANT_CHECKPOINT_KEY_EXPIRED`, `CHECKPOINT_ACCOUNTED_ONLY` (a chain with no entry whose only checkpoints are set aside) and `CHECKPOINT_ACCOUNTED_RUN_EXCEEDED` (more than 1000 set-aside checkpoints above the newest one that is not).
