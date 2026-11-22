@@ -19,6 +19,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 - `cborg` is pinned at 7.0.0, the version the Server encodes with. Everything this package encodes is byte-identical under both. One decode differs: 6.1.3 dropped a U+FEFF at the start of a text string and 7.0.0 keeps it, so a signed payload string that begins with one no longer fails `CHAIN_PAYLOAD_BINDING_MISMATCH` against its row.
 - Documentation and code comments describe the Server's behaviour rather than its internals.
 
+### Fixed
+
+- **A signed `traceparent` or `on_behalf_of` deleted from an export entry's `payload` fails `CHAIN_PAYLOAD_BINDING_MISMATCH`.** The Server writes every `on_behalf_of` and W3C `traceparent` an entry signed into that entry's export `payload`, so a copy that is missing, or replaced by a value the Server would not have written, was removed after export. A rewritten or added copy already failed; a deleted one verified. A vault dump row never holds either one, so the dump path keeps holding a row copy only when present.
+
 ## [2.1.0] - 2026-11-05
 
 ### Added

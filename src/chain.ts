@@ -202,6 +202,15 @@ export interface NormalizedEntry {
     recordId: string | null;
     entryType: string;
     payload: Record<string, unknown>;
+    /**
+     * True when `payload` is a projection that carries every envelope
+     * extension the entry signed, as an export entry's does: the Server
+     * writes `on_behalf_of` and `traceparent` into it from the signed
+     * predicate. Then a signed extension missing from `payload` is a
+     * mismatch. A vault row's payload never holds them, so the dump path
+     * leaves this unset.
+     */
+    extensionsProjected?: boolean;
   };
   /** Inputs for the OIDC-actor cross-check (dump path). */
   oidcActor?: {
@@ -973,7 +982,7 @@ function verifyEntry(
       decoded === null ||
       rebuilt === null ||
       !deepEqual(rebuilt, decoded) ||
-      !envelopeExtensionsMatch(entry.binding.payload, decodedRaw)
+      !envelopeExtensionsMatch(entry.binding.payload, decodedRaw, entry.binding.extensionsProjected === true)
     ) {
       return fail(
         scopeId,

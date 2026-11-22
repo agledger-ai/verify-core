@@ -16,12 +16,21 @@ export const load = (name: string): RecordAuditExportInput =>
  * valid.json with every entry re-signed under `key` and the chain relinked:
  * what the holder of a leaked key that admitted `key` can produce.
  */
-export function resignedUnder(key: TestKey): RecordAuditExportInput {
+export function resignedUnder(
+  key: TestKey,
+  editStatement?: (index: number, statement: Record<string, unknown>) => void,
+): RecordAuditExportInput {
   const exp = load('valid.json');
   const priv = { key: Buffer.from(key.privateKey, 'base64'), format: 'der' as const, type: 'pkcs8' as const };
   let prev: Buffer | null = null;
-  for (const e of exp.entries) {
-    const [prot0, , payload] = cborDecode(Buffer.from(e.integrity.coseSign1, 'base64').subarray(1), { useMaps: true }) as [Uint8Array, unknown, Uint8Array];
+  for (const [i, e] of exp.entries.entries()) {
+    const [prot0, , payload0] = cborDecode(Buffer.from(e.integrity.coseSign1, 'base64').subarray(1), { useMaps: true }) as [Uint8Array, unknown, Uint8Array];
+    let payload = payload0;
+    if (editStatement !== undefined) {
+      const stmt = cborDecode(payload0, { useMaps: false }) as Record<string, unknown>;
+      editStatement(i, stmt);
+      payload = cborEncode(stmt, rfc8949EncodeOptions);
+    }
     const header = cborDecode(prot0, { useMaps: true }) as Map<number, unknown>;
     header.set(4, Uint8Array.from(Buffer.from(key.kid, 'hex')));
     (header.get(-65537) as Map<number, unknown>).set(2, prev === null ? null : Uint8Array.from(prev));

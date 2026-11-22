@@ -1082,23 +1082,34 @@ export function stripEnvelopeExtensions(
  * lifts only an object `on_behalf_of` and a v00 `traceparent`, so a genuine
  * older row holding another shape signed nothing for it.
  *
- * A row without them is not a mismatch: the Server also signs an
- * `on_behalf_of` built from the request's authentication rather than from the
- * payload, and that one never reaches the row payload. Its identity is held to
- * the row's actor columns by the OIDC-actor check instead.
+ * `projected` says whether the payload is one the Server fills from the
+ * signed predicate. An export entry's is: the Server writes every
+ * `on_behalf_of` and v00 `traceparent` the entry signed into it, including an
+ * `on_behalf_of` built from the request's authentication, so a signed one the
+ * payload lacks was deleted after export. A vault row's payload never holds
+ * them (the Server keeps them only inside the signed envelope), so on a dump
+ * a row without them is not a mismatch, and the identity is held to the row's
+ * actor columns by the OIDC-actor check instead.
  */
 export function envelopeExtensionsMatch(
   rowPayload: Record<string, unknown>,
   signedPredicate: Record<string, unknown>,
+  projected = false,
 ): boolean {
   const obo = rowPayload['on_behalf_of'];
-  if (obo !== null && typeof obo === 'object' && !Array.isArray(obo)) {
-    if (!deepEqual(obo, signedPredicate['on_behalf_of'])) return false;
-  }
+  const rowObo = obo !== null && typeof obo === 'object' && !Array.isArray(obo) ? obo : undefined;
+  const signedOboRaw = signedPredicate['on_behalf_of'];
+  const signedObo =
+    signedOboRaw !== null && typeof signedOboRaw === 'object' && !Array.isArray(signedOboRaw) ? signedOboRaw : undefined;
+  if (rowObo !== undefined && !deepEqual(rowObo, signedPredicate['on_behalf_of'])) return false;
+  if (projected && signedObo !== undefined && rowObo === undefined) return false;
+
   const tp = rowPayload['traceparent'];
-  if (typeof tp === 'string' && TRACEPARENT_REGEX.test(tp) && tp !== signedPredicate['traceparent']) {
-    return false;
-  }
+  const rowTp = typeof tp === 'string' && TRACEPARENT_REGEX.test(tp) ? tp : undefined;
+  const signedTpRaw = signedPredicate['traceparent'];
+  const signedTp = typeof signedTpRaw === 'string' && TRACEPARENT_REGEX.test(signedTpRaw) ? signedTpRaw : undefined;
+  if (rowTp !== undefined && rowTp !== signedPredicate['traceparent']) return false;
+  if (projected && signedTp !== undefined && rowTp === undefined) return false;
   return true;
 }
 

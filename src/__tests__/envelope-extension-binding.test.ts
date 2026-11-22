@@ -4,6 +4,8 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { verifyAuditExport } from '../audit-export.js';
 import type { RecordAuditExportInput } from '../audit-export.js';
+import { resignedUnder } from './export-fixtures.js';
+import { makeKey } from './key-statements-helpers.js';
 
 /**
  * A row copy of `on_behalf_of` / `traceparent` in an export entry's `payload`
@@ -65,10 +67,12 @@ describe('envelope extensions in the row payload are bound to the signed predica
     expect(verifyAuditExport(doc).valid).toBe(true);
   });
 
-  it('a row without the block still verifies: the Server signs an on_behalf_of from authentication that never reaches the row', () => {
+  it('an export entry without the signed block fails: the Server writes every signed on_behalf_of into the export payload', () => {
     const doc = load('export-cert-lifecycle.json');
     delete firstWithObo(doc).payload['on_behalf_of'];
-    expect(verifyAuditExport(doc).valid).toBe(true);
+    const result = verifyAuditExport(doc);
+    expect(result.valid).toBe(false);
+    expect(result.brokenAt?.code).toBe('CHAIN_PAYLOAD_BINDING_MISMATCH');
   });
 
   it('an on_behalf_of block added to an entry that signed none fails the binding', () => {
@@ -97,5 +101,56 @@ describe('envelope extensions in the row payload are bound to the signed predica
     if (!entry?.payload) throw new Error('fixture has no payload');
     entry.payload['traceparent'] = 'not-a-traceparent';
     expect(verifyAuditExport(doc).valid).toBe(true);
+  });
+});
+
+describe('a signed traceparent is held to the export payload in both directions', () => {
+  const TP = '00-29dc9f4fa12cb73eab3adb6b655b27df-73a02c73825c1aa1-01';
+
+  // valid.json with its first entry (position 1) signing predicate.traceparent, and the
+  // export payload carrying it, as a Server writes a record created with
+  // metadata.traceparent.
+  function traced(): { doc: RecordAuditExportInput; payload: Record<string, unknown> } {
+    const k = makeKey();
+    const doc = resignedUnder(k, (i, stmt) => {
+      if (i === 0) (stmt['predicate'] as Record<string, unknown>)['traceparent'] = TP;
+    });
+    doc.exportMetadata.signingPublicKeys = { [k.kid]: k.publicKey };
+    doc.exportMetadata.signingKeyWindows = { [k.kid]: { activatedAt: null, retiredAt: null } };
+    const payload = (doc.entries[0] as Entry).payload;
+    if (!payload) throw new Error('valid.json entry 0 carries no payload');
+    payload['traceparent'] = TP;
+    return { doc, payload };
+  }
+
+  it('verifies untouched', () => {
+    const { doc } = traced();
+    const result = verifyAuditExport(doc);
+    expect(result.brokenAt).toBeUndefined();
+    expect(result.valid).toBe(true);
+  });
+
+  it('a deleted traceparent fails the binding', () => {
+    const { doc, payload } = traced();
+    delete payload['traceparent'];
+    const result = verifyAuditExport(doc);
+    expect(result.valid).toBe(false);
+    expect(result.brokenAt).toMatchObject({ position: 1, code: 'CHAIN_PAYLOAD_BINDING_MISMATCH' });
+  });
+
+  it('a traceparent replaced by a value the Server would drop fails the binding', () => {
+    const { doc, payload } = traced();
+    payload['traceparent'] = 'not-a-traceparent';
+    const result = verifyAuditExport(doc);
+    expect(result.valid).toBe(false);
+    expect(result.brokenAt?.code).toBe('CHAIN_PAYLOAD_BINDING_MISMATCH');
+  });
+
+  it('a changed traceparent fails the binding', () => {
+    const { doc, payload } = traced();
+    payload['traceparent'] = TP.replace('-01', '-00');
+    const result = verifyAuditExport(doc);
+    expect(result.valid).toBe(false);
+    expect(result.brokenAt?.code).toBe('CHAIN_PAYLOAD_BINDING_MISMATCH');
   });
 });

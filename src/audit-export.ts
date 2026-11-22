@@ -477,6 +477,7 @@ export function verifyAuditExport(
         recordId: e.recordId ?? null,
         entryType: e.entryType,
         payload: e.payload,
+        extensionsProjected: true,
       };
     }
     // An inlined evidence body is unsigned; it is re-bound to the hash the
