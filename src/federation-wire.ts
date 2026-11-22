@@ -459,7 +459,8 @@ export const FEDERATION_KEY_WINDOW_SKEW_MS = 300_000;
  *
  * Runs on an entry that already passed every other check, so `payload` is
  * what the receiver signed. `recordId` is the entry's record; the body names
- * the same record on every message type that carries one. When the sender's
+ * the same record on every message type that carries one, or, on an entry that
+ * signs `origin`, the record id `origin` names. When the sender's
  * keys came with a history, the message is placed in a key's window by
  * `wire.timestamp`: the sender signed it, the receiver sealed it under its own
  * signature after holding it to its clock-skew allowance, and it is read from
@@ -484,9 +485,35 @@ export function checkFederationWire(
   if (typeof payload.peerHubId === 'string' && payload.peerHubId !== wire.senderHubId) {
     return { outcome: 'invalid', detail: `Entry names peer ${payload.peerHubId}, the sealed message was sent by ${wire.senderHubId}.` };
   }
+  // A projection is keyed by its sending Server and the record id that Server
+  // named. When the receiver already held that id, the projection lives under
+  // a fresh local id and its entries sign `origin`, the sender and the id it
+  // sent: the sealed body names `origin.recordId`, not the entry's record.
+  // Entries written before `origin` was signed name the entry's own record.
+  const origin = payload.origin;
+  let expectedRecordId = recordId;
+  if (origin !== undefined && origin !== null) {
+    if (typeof origin !== 'object' || Array.isArray(origin)) {
+      return { outcome: 'invalid', detail: `Entry origin is ${canonicalizeJson(origin)}, not an object naming the sending Server and the record id it sent.` };
+    }
+    const o = origin as Record<string, unknown>;
+    if (typeof o.peerHubId !== 'string' || typeof o.recordId !== 'string') {
+      return { outcome: 'invalid', detail: `Entry origin ${canonicalizeJson(origin)} does not name both peerHubId and recordId as strings.` };
+    }
+    if (o.peerHubId !== wire.senderHubId) {
+      return { outcome: 'invalid', detail: `Entry origin names peer ${o.peerHubId}, the sealed message was sent by ${wire.senderHubId}.` };
+    }
+    expectedRecordId = o.recordId;
+  }
   const bodyRecordId = wire.body.recordId;
-  if (recordId !== null && typeof bodyRecordId === 'string' && bodyRecordId !== recordId) {
-    return { outcome: 'invalid', detail: `Entry is on record ${recordId}, the sealed message names record ${bodyRecordId}.` };
+  if (expectedRecordId !== null && typeof bodyRecordId === 'string' && bodyRecordId.toLowerCase() !== expectedRecordId.toLowerCase()) {
+    return {
+      outcome: 'invalid',
+      detail:
+        origin === undefined || origin === null
+          ? `Entry is on record ${recordId}, the sealed message names record ${bodyRecordId}.`
+          : `Entry origin names record ${expectedRecordId}, the sealed message names record ${bodyRecordId}.`,
+    };
   }
   for (const [entryField, bodyField] of FIELD_PAIRS[entryType] ?? []) {
     const mine = payload[entryField];

@@ -198,6 +198,58 @@ describe('a sealed federation message on a receiver\'s chain', () => {
     expect(r.brokenAt?.detail).toContain('names peer hub-other');
   });
 
+  describe('on a projection held under a fresh local id', () => {
+    // The sender named `wireId`; the receiver already held it, so the
+    // projection lives under the export's own record id and its entries sign
+    // `origin`. The sealed body keeps the id the sender named.
+    const wireId = '0199a8f0-0000-7000-8000-0000000000aa';
+    const wireBody = { ...body, recordId: wireId };
+
+    it('verifies when origin names the sender and the record id it sealed', () => {
+      const exp = exportWithWire(vault, AT, projection(sealed(sender, wireBody), { origin: { peerHubId: SENDER_HUB, recordId: wireId } }));
+      const r = verifyAuditExport(exp, { federationKeys: { [SENDER_HUB]: sender.publicKey } });
+      expect(r.brokenAt).toBeUndefined();
+      expect(r.valid).toBe(true);
+      expect(r.federationWire).toEqual({ present: 1, verified: 1, failed: 0, afterRetirement: 0 });
+    });
+
+    it('verifies when origin names the entry\'s own record, as on a projection that kept the sent id', () => {
+      const exp = exportWithWire(vault, AT, projection(sealed(sender, body), { origin: { peerHubId: SENDER_HUB, recordId } }));
+      expect(verifyAuditExport(exp).valid).toBe(true);
+    });
+
+    it('fails when origin names a record id other than the one sealed', () => {
+      const exp = exportWithWire(vault, AT, projection(sealed(sender, wireBody), { origin: { peerHubId: SENDER_HUB, recordId } }));
+      const r = verifyAuditExport(exp);
+      expect(r.valid).toBe(false);
+      expect(r.brokenAt).toMatchObject({ position: AT + 1, code: 'CHAIN_FEDERATION_WIRE_INVALID' });
+      expect(r.brokenAt?.detail).toContain(`Entry origin names record ${recordId}, the sealed message names record ${wireId}`);
+    });
+
+    it('fails when origin names a sender other than the one that sealed the message', () => {
+      const exp = exportWithWire(vault, AT, projection(sealed(sender, wireBody), { origin: { peerHubId: 'hub-other', recordId: wireId } }));
+      const r = verifyAuditExport(exp);
+      expect(r.valid).toBe(false);
+      expect(r.brokenAt?.detail).toContain('Entry origin names peer hub-other');
+    });
+
+    it('fails without origin, since the sealed message then names another record', () => {
+      const exp = exportWithWire(vault, AT, projection(sealed(sender, wireBody)));
+      const r = verifyAuditExport(exp);
+      expect(r.valid).toBe(false);
+      expect(r.brokenAt?.detail).toContain(`Entry is on record ${recordId}, the sealed message names record ${wireId}`);
+    });
+
+    it('fails an origin that is not an object naming both fields', () => {
+      for (const origin of ['hub-sender', [SENDER_HUB, wireId], { peerHubId: SENDER_HUB }]) {
+        const exp = exportWithWire(vault, AT, projection(sealed(sender, wireBody), { origin }));
+        const r = verifyAuditExport(exp);
+        expect(r.valid).toBe(false);
+        expect(r.brokenAt?.code).toBe('CHAIN_FEDERATION_WIRE_INVALID');
+      }
+    });
+  });
+
   it('fails a wire that is not a sealed message at all', () => {
     const exp = exportWithWire(vault, AT, projection(sealed(sender, body), { wire: 'yes' }));
     const r = verifyAuditExport(exp);

@@ -21,6 +21,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
+- **A federation projection held under a fresh local record id verifies.** From AGLedger Server 3.0.0, a receiving Server that already holds the record id a peer names stores that peer's projection under a new local id, and each entry it writes for a projection signs `origin`: the sending Server and the record id it sent. The sealed message keeps the id the sender named, so the verifier failed every such entry with `CHAIN_FEDERATION_WIRE_INVALID` ("the sealed message names record ..."). When an entry signs `origin`, the sealed message's record id is now compared with `origin.recordId`, and `origin.peerHubId` must be the sealed sender. Entries without `origin` are compared with their own record id, as before.
+
 - **A signed `traceparent` or `on_behalf_of` deleted from an export entry's `payload` fails `CHAIN_PAYLOAD_BINDING_MISMATCH`.** The Server writes every `on_behalf_of` and W3C `traceparent` an entry signed into that entry's export `payload`, so a copy that is missing, or replaced by a value the Server would not have written, was removed after export. A rewritten or added copy already failed; a deleted one verified. A vault dump row never holds either one, so the dump path keeps holding a row copy only when present.
 
 ## [2.1.0] - 2026-11-05
