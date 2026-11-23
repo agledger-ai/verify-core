@@ -431,6 +431,12 @@ export function verifyAuditExport(
     && !(typeof options.expectedEntryCount === 'number' && Number.isInteger(options.expectedEntryCount) && options.expectedEntryCount >= 0)) {
     throw new TypeError(`verifyAuditExport: expectedEntryCount must be a non-negative integer (got ${JSON.stringify(options.expectedEntryCount)}).`);
   }
+  // Caller-supplied keys are refused before the export is read, so a bad option
+  // is reported as such whatever the input holds.
+  const agentKeys =
+    options.agentKeys !== undefined ? buildAgentKeyRegistry(options.agentKeys) : undefined;
+  const federationKeys =
+    options.federationKeys !== undefined ? buildFederationKeyRegistry(options.federationKeys) : undefined;
   const meta = exportData.exportMetadata;
   const entries = exportData.entries ?? [];
 
@@ -455,10 +461,6 @@ export function verifyAuditExport(
 
   const resolvedKeys = resolveKeys(exportData, options);
   let keys = buildKeyRegistry(resolvedKeys);
-  const agentKeys =
-    options.agentKeys !== undefined ? buildAgentKeyRegistry(options.agentKeys) : undefined;
-  const federationKeys =
-    options.federationKeys !== undefined ? buildFederationKeyRegistry(options.federationKeys) : undefined;
   // An empty trustAnchors is the same as none: no walk, keyTrust 'no_anchor'.
   const trust =
     options.trustAnchors !== undefined && options.trustAnchors.length > 0
