@@ -434,12 +434,17 @@ export type FederationWireOutcome =
  * The receiver projects these from the message, so a disagreement means the
  * entry says something the sender did not sign.
  */
-const FIELD_PAIRS: Readonly<Record<string, ReadonlyArray<readonly [entryField: string, bodyField: string, required: boolean]>>> = {
+type Required = boolean | ((payload: Record<string, unknown>) => boolean);
+
+/** A state sync with `kind: "dispute"` projects a dispute event, which carries no state. */
+const isDisputeSync = (payload: Record<string, unknown>): boolean => payload.kind === 'dispute';
+
+const FIELD_PAIRS: Readonly<Record<string, ReadonlyArray<readonly [entryField: string, bodyField: string, required: Required]>>> = {
   FEDERATION_STATE_SYNC: [
-    ['state', 'state', true],
+    ['state', 'state', (p) => !isDisputeSync(p)],
     ['recordType', 'type', false],
-    ['disputeId', 'disputeId', false],
-    ['action', 'action', false],
+    ['disputeId', 'disputeId', isDisputeSync],
+    ['action', 'action', isDisputeSync],
   ],
   FEDERATION_SIGNAL_RECEIVED: [['recommendation', 'recommendation', true]],
   FEDERATION_CO_SIGN_RESPONDED: [
@@ -550,7 +555,7 @@ export function checkFederationWire(
     const mineAbsent = mine === undefined || mine === null;
     const theirsAbsent = theirs === undefined || theirs === null;
     if (mineAbsent && theirsAbsent) {
-      if (!required) continue;
+      if (!(typeof required === 'function' ? required(payload) : required)) continue;
       return { outcome: 'invalid', detail: `A ${entryType} entry must carry ${entryField}, and neither the entry nor the sealed message's ${bodyField} does.` };
     }
     if (mineAbsent || theirsAbsent) {

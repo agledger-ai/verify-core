@@ -203,6 +203,32 @@ describe('a sealed federation message on a receiver\'s chain', () => {
     }
   });
 
+  it('verifies a dispute projection, which is a state sync with no state, and fails one that drops its dispute id', () => {
+    const disputeBody = {
+      recordId,
+      action: 'opened',
+      disputeId: '0199a8f0-0000-7000-8000-00000000d15b',
+      disputeStatus: 'OPEN',
+      idempotencyKey: '0199a8f0-0000-7000-8000-00000000c0df',
+      schemaRef: body.schemaRef,
+    };
+    const disputeEntry = (wire: FederationWire, over: Record<string, unknown> = {}) => ({
+      peerHubId: SENDER_HUB,
+      kind: 'dispute',
+      action: disputeBody.action,
+      disputeId: disputeBody.disputeId,
+      disputeStatus: disputeBody.disputeStatus,
+      wire,
+      ...over,
+    });
+    const ok = verifyAuditExport(exportWithWire(vault, AT, disputeEntry(sealed(sender, disputeBody))));
+    expect(ok.valid).toBe(true);
+    const { disputeId: _d, ...noDispute } = disputeBody;
+    const bad = verifyAuditExport(exportWithWire(vault, AT, disputeEntry(sealed(sender, noDispute), { disputeId: null })));
+    expect(bad.valid).toBe(false);
+    expect(bad.brokenAt?.detail).toContain('must carry disputeId');
+  });
+
   it('fails when only one side of a compared field is present', () => {
     const { state: _s, ...noState } = body;
     const missingInBody = verifyAuditExport(exportWithWire(vault, AT, projection(sealed(sender, noState))));
