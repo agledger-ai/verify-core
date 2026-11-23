@@ -2,28 +2,29 @@
 // src/__tests__/key-trust-fuzz.ts, and the key document the Server would
 // publish for each (every anchored or vouched key with a row, its window and
 // the statements its entry files under it), for key-trust-engine.test.ts to
-// hold this package's walk to. Run from a Server source checkout at the
-// version the package targets, with that checkout's tsx, and pass the path of
-// this script:
+// hold this package's walk to. Needs the Server's key-statements module, as a
+// TypeScript source file, and a TypeScript runner (tsx):
 //
-//   node_modules/.bin/tsx <path-to-this-script> [first] [count]
+//   tsx scripts/record-key-trust-engine.mts <key-statements-module> [first] [count] [label]
 //
-// The Server's key-statements module is imported from that checkout's working
-// directory; if its location moves, update the import below.
+// `label` (default "server") is stored in the fixture as `engine`, to say
+// which Server release the verdicts came from.
 //
-// Re-record when the Server's walk changes, and say in the commit which
-// Server revision the verdicts came from.
-import { execFileSync } from 'node:child_process';
+// Re-record when the Server's walk changes.
 import { writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { POOL, scenario, verdictOf, toMs, type PublishedFuzzKey, type Verdict } from '../src/__tests__/key-trust-fuzz.ts';
 
-const engine = await import(pathToFileURL(resolve('src/modules/audit-vault/key-statements.ts')).href);
-const first = Number(process.argv[2] ?? 1);
-const count = Number(process.argv[3] ?? 300);
-let sha = 'unknown';
-try { sha = execFileSync('git', ['rev-parse', '--short=8', 'HEAD'], { encoding: 'utf8' }).trim(); } catch { /* not a git checkout */ }
+const modulePath = process.argv[2];
+if (modulePath === undefined) {
+  console.error('usage: tsx scripts/record-key-trust-engine.mts <key-statements-module> [first] [count] [label]');
+  process.exit(2);
+}
+const engine = await import(pathToFileURL(resolve(modulePath)).href);
+const first = Number(process.argv[3] ?? 1);
+const count = Number(process.argv[4] ?? 300);
+const label = process.argv[5] ?? 'server';
 
 const CODE: Record<string, string> = { key_statement_invalid: 'KEY_STATEMENT_INVALID', key_closure_invalid: 'KEY_CLOSURE_INVALID', key_window_drift: 'CHAIN_KEY_WINDOW_DRIFT' };
 const verdicts: Record<string, Verdict> = {};
@@ -123,5 +124,5 @@ for (let seed = first; seed < first + count; seed++) {
   }), true);
 }
 const out = new URL('../src/__tests__/fixtures/key-trust-engine.json', import.meta.url);
-writeFileSync(out, `${JSON.stringify({ engine: sha, first, count, verdicts, documents, published })}\n`);
-console.log(`recorded ${count} verdicts from engine ${sha}`);
+writeFileSync(out, `${JSON.stringify({ engine: label, first, count, verdicts, documents, published })}\n`);
+console.log(`recorded ${count} verdicts from ${label}`);

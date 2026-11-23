@@ -26,7 +26,8 @@ import {
  * checkout.
  */
 const recorded = JSON.parse(readFileSync(new URL('./fixtures/key-trust-engine.json', import.meta.url), 'utf8')) as {
-  Server: string;
+  /** A label for the Server the verdicts were recorded from. */
+  engine: string;
   verdicts: Record<string, Verdict>;
   /** The Server's walk over the document it publishes (`asDocument`), what it accounts for read as findings. */
   documents: Record<string, Verdict>;

@@ -1078,7 +1078,7 @@ describe('trustAnchors and distrustedKeys parsing', () => {
  * Random registries, ported from the Server: an honest history (a genesis,
  * rotations, routine retirements from another active key, and sometimes a key
  * anchored only by a pin) interleaved with what an attacker can store:
- * statements under keys the runtime role generates, copies of rows, and, once
+ * statements under keys an attacker generates, copies of rows, and, once
  * one honest key leaks, statements under that key, stored any time after
  * every key they name was readable, before the first honest row included. The
  * leaked key is then force-retired from the current honest key.

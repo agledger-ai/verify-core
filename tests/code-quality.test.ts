@@ -1,9 +1,7 @@
 /**
  * Source hygiene checks over this package's own code.
  *
- * Repo-scoped copy (verify-core is its own source-of-truth repo). Mirrors the
- * checks the AGLedger monorepo enforced, narrowed to this package's `src`.
- * Run with `npm test`.
+ * Source hygiene checks over this package's own code. Run with `npm test`.
  */
 
 import { readFileSync, readdirSync, statSync } from 'node:fs';
@@ -267,13 +265,13 @@ describe('no tracker references', () => {
   // consumer who reads it, and `dist/*.d.ts` puts it in their editor. Say
   // what the behaviour is rather than where it was decided.
   const TRACKER_REF =
-    /(?:agledger-)?(?:agents|api|testbed|web)#\d+|(?<![\w/])#\d{2,4}\b|\bF-\d{3}\b|\bCR-\d+\b/;
+    /\b[a-z][a-z-]*#\d+|(?<![\w/])#\d{2,4}\b|\bF-\d{3}\b|\bCR-\d+\b/;
 
-  it('source, tests and docs cite no issue numbers', () => {
-    const dirs = readdirSync(ROOT).filter(e => e === 'src' || e === 'test' || e === 'tests');
+  it('source, scripts, tests, docs and the changelog cite no issue numbers', () => {
+    const dirs = readdirSync(ROOT).filter(e => e === 'src' || e === 'test' || e === 'tests' || e === 'scripts');
     const files = [
-      ...dirs.flatMap(d => walk(join(ROOT, d), e => extname(e) === '.ts')),
-      ...walk(ROOT, e => extname(e) === '.md' && e !== 'CHANGELOG.md'),
+      ...dirs.flatMap(d => walk(join(ROOT, d), e => ['.ts', '.mts', '.mjs'].includes(extname(e)))),
+      ...walk(ROOT, e => extname(e) === '.md'),
     ];
     const found: string[] = [];
     for (const file of files) {

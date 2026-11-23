@@ -160,7 +160,7 @@ describe('key-statement walk over the dump corpus: pass vectors pinned on the Se
   });
 
   it.each(vectors)('%s verifies clean with every row of vault_key_statements copied under a new id and write time, as the Server reads such a copy', (dir) => {
-    // What anything with the runtime role can do to the append-only table:
+    // What anyone able to write to the stored rows can do:
     // INSERT ... SELECT subject_key_id, endorser_key_id, kind, statement.
     const copied = (rows: DumpKeyStatementRow[]) => [
       ...rows,
