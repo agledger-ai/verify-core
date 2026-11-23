@@ -54,6 +54,7 @@
  * statement is only ever in a document that did not come from the Server. A
  * forced closure voids every edge out of its key whatever the order.
  */
+import { STRICT_CBOR_DECODE } from './cbor-strict.js';
 import { decode as cborDecode, encode as cborEncode, rfc8949EncodeOptions } from 'cborg';
 import {
   algorithmByName,
@@ -468,13 +469,14 @@ function decodeSign1(raw: unknown): Sign1 | null {
   if (bytes === null || bytes.length === 0 || bytes[0] !== COSE_SIGN1_TAG_PREFIX) return null;
   try {
     const decoded = cborDecode(bytes, {
+      ...STRICT_CBOR_DECODE,
       useMaps: true,
       tags: { [COSE_SIGN1_TAG]: (control: () => unknown) => control() },
     }) as unknown;
     if (!Array.isArray(decoded) || decoded.length !== 4) return null;
     const [p, , payload, sig] = decoded as [unknown, unknown, unknown, unknown];
     if (!(p instanceof Uint8Array) || !(payload instanceof Uint8Array) || !(sig instanceof Uint8Array)) return null;
-    const header = cborDecode(p, { useMaps: true }) as unknown;
+    const header = cborDecode(p, { ...STRICT_CBOR_DECODE, useMaps: true }) as unknown;
     if (!(header instanceof Map)) return null;
     const alg: unknown = header.get(COSE_HEADER_ALG);
     const kid: unknown = header.get(COSE_HEADER_KID);
@@ -514,7 +516,7 @@ function readKeyRef(v: unknown): KeyRef | null {
 function decodeKeyStatementPayload(bytes: Uint8Array): KeyStatementPayload | null {
   let raw: unknown;
   try {
-    raw = cborDecode(bytes, { useMaps: false });
+    raw = cborDecode(bytes, { ...STRICT_CBOR_DECODE, useMaps: false });
   } catch {
     return null;
   }

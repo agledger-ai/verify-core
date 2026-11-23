@@ -19,6 +19,7 @@
  * regression net that catches divergence.
  */
 import { createPublicKey, getFips, hash, verify } from 'node:crypto';
+import { STRICT_CBOR_DECODE } from './cbor-strict.js';
 import { decode as cborDecode, encode as cborEncode, rfc8949EncodeOptions } from 'cborg';
 
 // --- SHA-256 ---
@@ -474,6 +475,7 @@ export function decodeCoseSign1(bytes: Uint8Array): CoseSign1Parts | null {
   if (bytes.length === 0 || bytes[0] !== COSE_SIGN1_TAG_PREFIX) return null;
   try {
     const decoded = cborDecode(bytes, {
+      ...STRICT_CBOR_DECODE,
       useMaps: true,
       tags: { [COSE_SIGN1_TAG]: (control: () => unknown) => control() },
     }) as unknown;
@@ -583,7 +585,7 @@ export function verifyCoseSign1(
 /** Decode the protected header's `alg` (label 1); null when absent or not an int. */
 function extractHeaderAlg(protectedBstr: Uint8Array): number | null {
   try {
-    const ph = cborDecode(protectedBstr, { useMaps: true }) as Map<number, unknown>;
+    const ph = cborDecode(protectedBstr, { ...STRICT_CBOR_DECODE, useMaps: true }) as Map<number, unknown>;
     const alg = ph.get(COSE_HEADER_ALG);
     if (typeof alg === 'number' && Number.isInteger(alg)) return alg;
     if (typeof alg === 'bigint') return Number(alg);
@@ -602,7 +604,7 @@ function extractHeaderAlg(protectedBstr: Uint8Array): number | null {
  */
 export function extractKid(protectedBstr: Uint8Array): string | null {
   try {
-    const ph = cborDecode(protectedBstr, { useMaps: true }) as Map<number, unknown>;
+    const ph = cborDecode(protectedBstr, { ...STRICT_CBOR_DECODE, useMaps: true }) as Map<number, unknown>;
     const kid = ph.get(COSE_HEADER_KID);
     if (!(kid instanceof Uint8Array)) return null;
     return Buffer.from(kid).toString('hex');
@@ -629,7 +631,7 @@ const CHAIN_SUBLABEL_PREVIOUS_HASH = 2;
 
 export function extractChainClaim(protectedBstr: Uint8Array): ChainClaim | null {
   try {
-    const ph = cborDecode(protectedBstr, { useMaps: true }) as Map<number, unknown>;
+    const ph = cborDecode(protectedBstr, { ...STRICT_CBOR_DECODE, useMaps: true }) as Map<number, unknown>;
     const chain = ph.get(AGLEDGER_LABEL_CHAIN);
     if (!(chain instanceof Map)) return null;
     const position: unknown = chain.get(CHAIN_SUBLABEL_POSITION);
@@ -679,7 +681,7 @@ function bytesToUuid(bytes: Uint8Array): string | null {
 
 export function extractActorClaim(protectedBstr: Uint8Array): ActorClaim | null {
   try {
-    const ph = cborDecode(protectedBstr, { useMaps: true }) as Map<number, unknown>;
+    const ph = cborDecode(protectedBstr, { ...STRICT_CBOR_DECODE, useMaps: true }) as Map<number, unknown>;
     const cwt = ph.get(COSE_HEADER_CWT_CLAIMS);
     if (!(cwt instanceof Map)) return null;
     const actor: unknown = cwt.get(AGLEDGER_LABEL_ACTOR);
@@ -711,7 +713,7 @@ export function extractOnBehalfOfClaim(
   payloadBstr: Uint8Array,
 ): Record<string, unknown> | null {
   try {
-    const stmt = cborDecode(payloadBstr, { useMaps: false }) as Record<string, unknown>;
+    const stmt = cborDecode(payloadBstr, { ...STRICT_CBOR_DECODE, useMaps: false }) as Record<string, unknown>;
     const predicate = stmt['predicate'];
     if (predicate === null || typeof predicate !== 'object' || Array.isArray(predicate)) {
       return null;
@@ -733,7 +735,7 @@ export function extractOnBehalfOfClaim(
  */
 export function extractTraceparentClaim(payloadBstr: Uint8Array): string | null {
   try {
-    const stmt = cborDecode(payloadBstr, { useMaps: false }) as Record<string, unknown>;
+    const stmt = cborDecode(payloadBstr, { ...STRICT_CBOR_DECODE, useMaps: false }) as Record<string, unknown>;
     const predicate = stmt['predicate'];
     if (predicate === null || typeof predicate !== 'object' || Array.isArray(predicate)) {
       return null;
@@ -887,7 +889,7 @@ export function verifyAgentSignature(
  */
 export function decodePredicate(payloadBstr: Uint8Array): Record<string, unknown> | null {
   try {
-    const stmt = cborDecode(payloadBstr, { useMaps: false }) as Record<string, unknown>;
+    const stmt = cborDecode(payloadBstr, { ...STRICT_CBOR_DECODE, useMaps: false }) as Record<string, unknown>;
     const predicate = stmt['predicate'];
     if (predicate === null || typeof predicate !== 'object' || Array.isArray(predicate)) {
       return null;
@@ -1215,6 +1217,7 @@ export function extractReceiptInclusionProof(
 ): ReceiptInclusionProof | null {
   try {
     const decoded = cborDecode(receiptBytes, {
+      ...STRICT_CBOR_DECODE,
       useMaps: true,
       tags: { [COSE_SIGN1_TAG]: (control: () => unknown) => control() },
     }) as unknown;
