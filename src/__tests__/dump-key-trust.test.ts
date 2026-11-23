@@ -28,7 +28,7 @@ interface DumpVector {
   file: string;
   expect: 'pass' | 'fail';
   failureCode?: FailureCode;
-  options?: { trustAnchors?: string[] };
+  options?: { trustAnchors?: string[]; distrustedKeys?: string[] };
   requiresAlgorithms?: string[];
 }
 
@@ -113,7 +113,14 @@ function currentPin(dir: string): string {
 const manifest = JSON.parse(readFileSync(join(CORPUS, 'manifest-dump.json'), 'utf8')) as { vectors: DumpVector[] };
 
 describe('key-statement walk over the dump corpus: vectors that pin trustAnchors', () => {
-  const pinned = manifest.vectors.filter((v) => v.options?.trustAnchors !== undefined);
+  // A checkpoint or read-log verdict, and what a distrusted key accounts for,
+  // are @agledger/verify's to give: this walk grades chain entries on anchors
+  // alone.
+  const pinned = manifest.vectors.filter(
+    (v) => v.options?.trustAnchors !== undefined
+      && v.options.distrustedKeys === undefined
+      && !/^(CHECKPOINT|TENANT)_/.test(v.failureCode ?? ''),
+  );
 
   it('the corpus carries them', () => {
     expect(pinned.length).toBeGreaterThanOrEqual(4);
