@@ -1,7 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { join } from 'node:path';
 import { verifyAuditExport } from '../audit-export.js';
 import type { RecordAuditExportInput, VerifyExportOptions } from '../audit-export.js';
 import type { FailureCode } from '../failures.js';
@@ -21,7 +20,7 @@ import type { AgentPublicKeyJwk } from '../primitives.js';
  * bilingual superset.
  */
 
-const HERE = dirname(fileURLToPath(import.meta.url));
+const HERE = import.meta.dirname;
 // src/__tests__ -> repo root is two levels up (corpus vendored at repo root;
 // the Server owns generation, this repo pins the export-kind slice).
 const CONFORMANCE_DIR = join(HERE, '..', '..', 'testdata', 'conformance');

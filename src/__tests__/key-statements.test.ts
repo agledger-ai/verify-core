@@ -209,25 +209,25 @@ describe('each statement check holds on its own', () => {
     iat: 1,
   });
   const filed = (kind: string, subjectKeyId: string, cose: Buffer[]): KeyStatementInput => ({ id: nextId(), kind, subjectKeyId, cose });
-  const refused = (k: TestKey, st: KeyStatementInput) => {
+  const expectRefused = (k: TestKey, st: KeyStatementInput) => {
     expect(codes(walk([], [st], [k.digest]))).toEqual([['KEY_STATEMENT_INVALID', st.id]]);
   };
-  const clean = (k: TestKey, st: KeyStatementInput) => {
+  const expectClean = (k: TestKey, st: KeyStatementInput) => {
     expect(walk([], [st], [k.digest]).findings).toEqual([]);
   };
 
   it('the protected header carries the key statement content type', () => {
     const c = makeKey();
     const bytes = encodePayload(genesisPayload(c));
-    clean(c, filed('genesis', c.kid, [signStatement(bytes, c)]));
-    refused(c, filed('genesis', c.kid, [signStatement(bytes, c, { cty: 'application/cbor' })]));
-    refused(c, filed('genesis', c.kid, [signStatement(bytes, c, { cty: 60 })]));
+    expectClean(c, filed('genesis', c.kid, [signStatement(bytes, c)]));
+    expectRefused(c, filed('genesis', c.kid, [signStatement(bytes, c, { cty: 'application/cbor' })]));
+    expectRefused(c, filed('genesis', c.kid, [signStatement(bytes, c, { cty: 60 })]));
   });
 
   it('the protected header names the key that signed', () => {
     const c = makeKey();
     const other = makeKey();
-    refused(c, filed('genesis', c.kid, [signStatement(encodePayload(genesisPayload(c)), c, { kid: other.kid })]));
+    expectRefused(c, filed('genesis', c.kid, [signStatement(encodePayload(genesisPayload(c)), c, { kid: other.kid })]));
   });
 
   it('the payload is deterministic CBOR: the same map in another key order is refused', () => {
@@ -237,29 +237,29 @@ describe('each statement check holds on its own', () => {
     const reordered = cborEncode(new Map([...decoded].reverse()), { mapSorter: () => 0 });
     expect(Buffer.from(reordered).equals(Buffer.from(canonical))).toBe(false);
     expect(cborDecode(reordered)).toEqual(cborDecode(canonical));
-    clean(c, filed('genesis', c.kid, [signStatement(canonical, c)]));
-    refused(c, filed('genesis', c.kid, [signStatement(reordered, c)]));
+    expectClean(c, filed('genesis', c.kid, [signStatement(canonical, c)]));
+    expectRefused(c, filed('genesis', c.kid, [signStatement(reordered, c)]));
   });
 
   it('the subject kid is its SPKI fingerprint', () => {
     const c = makeKey();
     const kid = c.kid === 'aaaaaaaaaaaaaaaa' ? 'bbbbbbbbbbbbbbbb' : 'aaaaaaaaaaaaaaaa';
-    refused(c, filed('genesis', kid, [signStatement(encodePayload(genesisPayload(c, { kid })), c, { kid })]));
+    expectRefused(c, filed('genesis', kid, [signStatement(encodePayload(genesisPayload(c, { kid })), c, { kid })]));
   });
 
   it('the subject alg names the algorithm its SPKI commits to', () => {
     const c = makeKey();
-    refused(c, filed('genesis', c.kid, [signStatement(encodePayload(genesisPayload(c, { alg: 'ES256' })), c)]));
+    expectRefused(c, filed('genesis', c.kid, [signStatement(encodePayload(genesisPayload(c, { alg: 'ES256' })), c)]));
     const e = makeKey('ES256');
-    clean(e, filed('genesis', e.kid, [signStatement(encodePayload(genesisPayload(e)), e)]));
-    refused(e, filed('genesis', e.kid, [signStatement(encodePayload(genesisPayload(e, { alg: 'Ed25519' })), e)]));
+    expectClean(e, filed('genesis', e.kid, [signStatement(encodePayload(genesisPayload(e)), e)]));
+    expectRefused(e, filed('genesis', e.kid, [signStatement(encodePayload(genesisPayload(e, { alg: 'Ed25519' })), e)]));
   });
 
   it('a statement carries exactly the signatures its kind takes', () => {
     const c = makeKey();
     const n = makeKey();
     const bytes = encodePayload(genesisPayload(c));
-    refused(c, filed('genesis', c.kid, [signStatement(bytes, c), signStatement(bytes, c)]));
+    expectRefused(c, filed('genesis', c.kid, [signStatement(bytes, c), signStatement(bytes, c)]));
     const succ = statement('succession', n, { endorser: c, signers: [c, n], activatedAt: T1 });
     const extra = { ...succ, cose: [...succ.cose, succ.cose[1]!] };
     expect(walk([], [statement('genesis', c, { signers: [c] }), succ], [c.digest]).findings).toEqual([]);

@@ -72,7 +72,8 @@ describe('verifyAuditExport with trustAnchors', () => {
     const keyId = exp.entries[0]!.integrity.signingKeyId!;
     const genesis = exp.exportMetadata.signingKeyStatements![keyId]![0]!;
     const bytes = Buffer.from(genesis.cose[0]!, 'base64');
-    bytes[bytes.length - 1]! ^= 0xff;
+    const lastByte = bytes.length - 1;
+    bytes[lastByte] ^= 0xff;
     genesis.cose[0] = bytes.toString('base64');
     const r = verifyAuditExport(exp, { trustAnchors: [pinOf(exp)] });
     expect(r.valid).toBe(false);

@@ -1,7 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { join } from 'node:path';
 import { verifyAuditExport } from '../audit-export.js';
 import type { RecordAuditExportInput } from '../audit-export.js';
 
@@ -9,7 +8,7 @@ import type { RecordAuditExportInput } from '../audit-export.js';
 // length is the only thing that shows the cut, so the verifier holds it to the
 // two counts the export states.
 
-const LIVE = join(dirname(fileURLToPath(import.meta.url)), 'fixtures', 'live-2.0.0');
+const LIVE = join(import.meta.dirname, 'fixtures', 'live-2.0.0');
 
 function load(): RecordAuditExportInput {
   return JSON.parse(readFileSync(join(LIVE, 'export-lifecycle.json'), 'utf8')) as RecordAuditExportInput;

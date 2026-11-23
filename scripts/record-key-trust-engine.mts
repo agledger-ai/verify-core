@@ -48,13 +48,17 @@ const verdictOfEngine = (t: EngineTrust, asDocument: boolean): Verdict => verdic
   accounted: asDocument ? [] : t.accounted,
   spans: t.distrustSpans,
 });
+const must = <T,>(value: T | undefined, what: string): T => {
+  if (value === undefined) throw new Error(`missing ${what}`);
+  return value;
+};
 const iso = (instant: string) => new Date(toMs(instant)).toISOString();
 for (let seed = first; seed < first + count; seed++) {
   const sc = scenario(seed);
   const rows = sc.rows.map((k) => ({
-    key_id: POOL[k.key]!.kid,
-    public_key: POOL[k.key]!.publicKey,
-    algorithm: POOL[k.key]!.alg,
+    key_id: must(POOL[k.key], 'POOL entry').kid,
+    public_key: must(POOL[k.key], 'POOL entry').publicKey,
+    algorithm: must(POOL[k.key], 'POOL entry').alg,
     status: k.status,
     activated_at: new Date(toMs(k.activatedAt)),
     retired_at: k.status === 'retired' ? new Date(toMs(k.retiredAt)) : null,
@@ -64,25 +68,25 @@ for (let seed = first; seed < first + count; seed++) {
   const statementRows = sc.statements.map((s) => ({
     id: s.id,
     kind: s.kind,
-    subject_key_id: POOL[s.subject]!.kid,
-    endorser_key_id: s.endorser === null ? null : POOL[s.endorser]!.kid,
+    subject_key_id: must(POOL[s.subject], 'POOL entry').kid,
+    endorser_key_id: s.endorser === null ? null : must(POOL[s.endorser], 'POOL entry').kid,
     statement: s.cose,
     created_at: new Date(s.createdMs),
     created_at_us: s.createdUs,
   }));
-  const anchors = new Set(sc.anchors.map((k) => POOL[k]!.digest));
-  const distrusted = sc.distrusted.map((d) => ({ spkiSha256: POOL[d.key]!.digest, cutoff: d.cutoff }));
+  const anchors = new Set(sc.anchors.map((k) => must(POOL[k], 'POOL entry').digest));
+  const distrusted = sc.distrusted.map((d) => ({ spkiSha256: must(POOL[d.key], 'POOL entry').digest, cutoff: d.cutoff }));
   const e: EngineTrust = engine.computeKeyTrust({ rows, statements: statementRows, anchors, distrusted });
   // As listPublishedSigningKeys publishes them (no fuzz key is undecided, so
   // nothing is vouched, but the rule is kept).
   const doc: PublishedFuzzKey[] = [];
   for (const [i, k] of sc.rows.entries()) {
-    const digest = POOL[k.key]!.digest;
+    const digest = must(POOL[k.key], 'POOL entry').digest;
     const signed = e.byDigest.get(digest);
     const anchored = e.anchored.has(digest);
     const vouched = !anchored && e.undecided.has(digest) && e.vouched.has(digest);
     if (!anchored && !vouched) continue;
-    const row = rows[i]!;
+    const row = must(rows[i], 'row');
     const retiredAt = anchored
       ? (signed?.retiredAt ? iso(signed.retiredAt) : null)
       : signed?.retiredAt ? iso(signed.retiredAt) : row.retired_at?.toISOString() ?? null;
@@ -102,9 +106,9 @@ for (let seed = first; seed < first + count; seed++) {
   // and the statements published with them.
   const ids = new Set(doc.flatMap((k) => k.statements));
   const docRows = doc.map((k) => {
-    const row = rows[sc.rows.findIndex((r) => r.key === k.key)]!;
-    const signed = e.byDigest.get(POOL[k.key]!.digest);
-    const anchored = e.anchored.has(POOL[k.key]!.digest);
+    const row = must(rows[sc.rows.findIndex((r) => r.key === k.key)], 'row');
+    const signed = e.byDigest.get(must(POOL[k.key], 'POOL entry').digest);
+    const anchored = e.anchored.has(must(POOL[k.key], 'POOL entry').digest);
     return {
       ...row,
       status: k.retiredAt === null ? 'active' : 'retired',

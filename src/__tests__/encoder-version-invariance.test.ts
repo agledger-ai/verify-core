@@ -1,7 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { readdirSync, readFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { join } from 'node:path';
 import { encode as cborEncode, rfc8949EncodeOptions } from 'cborg';
 import { decodeCoseSign1 } from '../primitives.js';
 
@@ -30,7 +29,7 @@ import { decodeCoseSign1 } from '../primitives.js';
  * than silently making the verifier's output depend on which cborg resolved.
  */
 
-const HERE = dirname(fileURLToPath(import.meta.url));
+const HERE = import.meta.dirname;
 const EXPORT_DIR = join(HERE, '..', '..', 'testdata', 'conformance', 'export');
 const SIG_STRUCTURE_CONTEXT = 'Signature1';
 
@@ -54,7 +53,7 @@ function majorTypesIn(bytes: Uint8Array): Set<number> {
     const ai = ib & 0x1f;
     seen.add(major);
 
-    let value = 0;
+    let value: number;
     if (ai < 24) {
       value = ai;
     } else if (ai === 24) {

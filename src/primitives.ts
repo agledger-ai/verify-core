@@ -285,7 +285,7 @@ const KAT_MESSAGE = Buffer.from('AGLedger verifier runtime known-answer test', '
 // failure at import rather than a quiet downgrade at audit time.
 const ALGORITHM_KATS = new Map<KeyAlgorithm, { spkiBase64: string; signatureBase64: string }>([
   [
-    KEY_ALGORITHMS['ed25519']!,
+    KEY_ALGORITHMS['ed25519'],
     {
       spkiBase64: 'MCowBQYDK2VwAyEAjChcTn8MOj5h5PpKz/+MvHfomativmvfmC1zV5Sczfo=',
       signatureBase64:
@@ -293,7 +293,7 @@ const ALGORITHM_KATS = new Map<KeyAlgorithm, { spkiBase64: string; signatureBase
     },
   ],
   [
-    KEY_ALGORITHMS['ec:prime256v1']!,
+    KEY_ALGORITHMS['ec:prime256v1'],
     {
       spkiBase64:
         'MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEEyJ40hViXjp41rIWYdbJT9bUHWVjYWpsOLKdc4F1L+c4reEK7WmCx1fI4sl0okBN/lNvhZT+0HZ44aUw5HKmFA==',
@@ -365,7 +365,7 @@ export function describeUnsupportedAlgorithm(publicKeyBase64: string): string {
   // the generic "upgrade the verifier" text would send an auditor after a build
   // that is fine. Answer from the OID instead.
   if (typeof keyAlg !== 'object' && isRuntimeRefusedEd25519Key(publicKeyBase64)) {
-    return describeRuntimeRefusal(KEY_ALGORITHMS['ed25519']!);
+    return describeRuntimeRefusal(KEY_ALGORITHMS['ed25519']);
   }
   if (typeof keyAlg !== 'object') {
     return 'commits to an algorithm this verifier build cannot compute. The chain is NOT verified; upgrade the verifier.';
@@ -632,8 +632,8 @@ export function extractChainClaim(protectedBstr: Uint8Array): ChainClaim | null 
     const ph = cborDecode(protectedBstr, { useMaps: true }) as Map<number, unknown>;
     const chain = ph.get(AGLEDGER_LABEL_CHAIN);
     if (!(chain instanceof Map)) return null;
-    const position = chain.get(CHAIN_SUBLABEL_POSITION);
-    const prev = chain.get(CHAIN_SUBLABEL_PREVIOUS_HASH);
+    const position: unknown = chain.get(CHAIN_SUBLABEL_POSITION);
+    const prev: unknown = chain.get(CHAIN_SUBLABEL_PREVIOUS_HASH);
     if (typeof position !== 'number' && typeof position !== 'bigint') return null;
     const positionNumber = typeof position === 'bigint' ? Number(position) : position;
     if (!Number.isInteger(positionNumber) || positionNumber < 1) return null;
@@ -682,11 +682,11 @@ export function extractActorClaim(protectedBstr: Uint8Array): ActorClaim | null 
     const ph = cborDecode(protectedBstr, { useMaps: true }) as Map<number, unknown>;
     const cwt = ph.get(COSE_HEADER_CWT_CLAIMS);
     if (!(cwt instanceof Map)) return null;
-    const actor = cwt.get(AGLEDGER_LABEL_ACTOR);
+    const actor: unknown = cwt.get(AGLEDGER_LABEL_ACTOR);
     if (!(actor instanceof Map)) return null;
-    const keyIdBytes = actor.get(ACTOR_SUBLABEL_KEY_ID);
-    const role = actor.get(ACTOR_SUBLABEL_ROLE);
-    const ownerIdBytes = actor.get(ACTOR_SUBLABEL_OWNER_ID);
+    const keyIdBytes: unknown = actor.get(ACTOR_SUBLABEL_KEY_ID);
+    const role: unknown = actor.get(ACTOR_SUBLABEL_ROLE);
+    const ownerIdBytes: unknown = actor.get(ACTOR_SUBLABEL_OWNER_ID);
     if (!(keyIdBytes instanceof Uint8Array) || !(ownerIdBytes instanceof Uint8Array)) return null;
     if (typeof role !== 'string') return null;
     const keyId = bytesToUuid(keyIdBytes);
@@ -1173,7 +1173,7 @@ export function verifyRfc9162Inclusion(
   let i = 0;
   for (; i < path.length; i += 1) {
     if (sn === 0) return false;
-    const p = path[i]!;
+    const p = path[i];
     if (fn % 2 === 1 || fn === sn) {
       r = rfc9162NodeHash(p, r);
       while (fn % 2 === 0 && fn !== 0) {
@@ -1221,9 +1221,9 @@ export function extractReceiptInclusionProof(
     if (!Array.isArray(decoded) || decoded.length !== 4) return null;
     const [, unprotected] = decoded as [unknown, unknown];
     if (!(unprotected instanceof Map)) return null;
-    const vdp = unprotected.get(COSE_HEADER_VDP);
+    const vdp: unknown = unprotected.get(COSE_HEADER_VDP);
     if (!(vdp instanceof Map)) return null;
-    const proof = vdp.get(VDP_INCLUSION_PROOF_KEY);
+    const proof: unknown = vdp.get(VDP_INCLUSION_PROOF_KEY);
     if (!Array.isArray(proof) || proof.length !== 3) return null;
     const [treeSizeRaw, leafIndexRaw, pathRaw] = proof as [unknown, unknown, unknown];
     const treeSize =
@@ -1329,7 +1329,7 @@ function splitPoint(n: number): number {
 }
 
 function rootOfLeafHashes(leafHashes: readonly Uint8Array[], lo: number, hi: number): Uint8Array {
-  if (hi - lo === 1) return leafHashes[lo]!;
+  if (hi - lo === 1) return leafHashes[lo];
   const k = splitPoint(hi - lo);
   return rfc9162NodeHash(rootOfLeafHashes(leafHashes, lo, lo + k), rootOfLeafHashes(leafHashes, lo + k, hi));
 }

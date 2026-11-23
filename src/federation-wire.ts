@@ -208,7 +208,7 @@ function verifyKeyStatement(stmt: FederationKeyHistoryStatement, hubId: string):
   if (typ === 'succession' && predecessor === undefined) return 'it is a succession with no predecessor';
   if (!verifyStatementSignature(subject.publicKey, String(stmt.subjectSignature), stmt.payload)) return 'its subjectSignature does not verify under its subject key';
   if (typ === 'succession') {
-    if (typeof stmt.predecessorSignature !== 'string' || !verifyStatementSignature(predecessor!.publicKey, stmt.predecessorSignature, stmt.payload)) {
+    if (typeof stmt.predecessorSignature !== 'string' || predecessor === undefined || !verifyStatementSignature(predecessor.publicKey, stmt.predecessorSignature, stmt.payload)) {
       return 'its predecessorSignature does not verify under its predecessor key';
     }
   } else if (stmt.predecessorSignature !== null && stmt.predecessorSignature !== undefined) {
@@ -233,7 +233,8 @@ function trustedKeysFromHistory(
   pins: ReadonlyArray<{ spki: string; label: string }>,
   histories: ReadonlyArray<{ doc: FederationKeyHistoryDocument; label: string }>,
 ): FederationTrustedKey[] {
-  if (algorithmByName('Ed25519') === null || !runtimeCanCompute(algorithmByName('Ed25519')!)) {
+  const ed25519 = algorithmByName('Ed25519');
+  if (ed25519 === null || !runtimeCanCompute(ed25519)) {
     throw new TypeError(`The federation key history for hub ${hubId} cannot be checked: this host cannot compute Ed25519 (an active OpenSSL FIPS provider carries no EdDSA).`);
   }
   const statements: StatementPayload[] = [];
@@ -244,7 +245,7 @@ function trustedKeysFromHistory(
     if (doc.statementDomain !== FEDERATION_KEY_STATEMENT_DOMAIN) {
       throw new TypeError(`${label} signs under ${JSON.stringify(doc.statementDomain)}, not ${FEDERATION_KEY_STATEMENT_DOMAIN}.`);
     }
-    doc.statements.forEach((stmt, j) => {
+    doc.statements.forEach((stmt: FederationKeyHistoryStatement, j) => {
       const id = isRecord(stmt) && typeof stmt.id === 'string' ? stmt.id : `#${j}`;
       if (seenIds.has(id)) return;
       seenIds.add(id);
@@ -294,18 +295,23 @@ function trustedKeysFromHistory(
     }
     const queue = [digest];
     while (queue.length > 0) {
-      const k = queue.pop()!;
-      if (trusted.has(k)) continue;
+      const k = queue.pop();
+      if (k === undefined || trusted.has(k)) continue;
       trusted.add(k);
       queue.push(...(links.get(k) ?? []));
     }
   }
   return [
-    ...[...trusted].map((digest) => ({
-      publicKey: publicKeyOf.get(digest)!,
-      activatedAt: admission.get(digest)?.subject.activatedAt ?? null,
-      retiredAt: retiredAt.get(digest) ?? null,
-    })),
+    ...[...trusted].flatMap((digest) => {
+      const publicKey = publicKeyOf.get(digest);
+      // Every trusted digest was reached through publicKeyOf, so none is skipped.
+      if (publicKey === undefined) return [];
+      return [{
+        publicKey,
+        activatedAt: admission.get(digest)?.subject.activatedAt ?? null,
+        retiredAt: retiredAt.get(digest) ?? null,
+      }];
+    }),
     ...[...standalone].map((publicKey) => ({ publicKey, activatedAt: null, retiredAt: null })),
   ];
 }

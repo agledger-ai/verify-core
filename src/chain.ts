@@ -590,7 +590,7 @@ export function verifyChain(
 
   let previousHash: string | null = null;
   for (let i = 0; i < sorted.length; i++) {
-    const entry = sorted[i]!;
+    const entry = sorted[i];
     const expectedPosition = i + 1;
     let result = verifyEntry(
       entry,
@@ -611,7 +611,7 @@ export function verifyChain(
       result = checkSealedFederationWire(entry, result, options.federationKeys, optionalChecks, federationWire);
     }
     if (result.valid && result.accounted === undefined && entry.inlinedEvidence !== undefined) {
-      result = checkInlinedEvidence(entry, result, optionalChecks, evidenceBinding);
+      result = checkInlinedEvidence(entry, entry.inlinedEvidence.value, result, optionalChecks, evidenceBinding);
     }
     entryResults.push(result);
 
@@ -644,6 +644,8 @@ export function verifyChain(
       // 'not-checked' / 'invalid' / 'decode-fail' / 'unsupported' are failure
       // states: the entry is already counted as broken, so it contributes to
       // no coverage bucket.
+      default:
+        break;
     }
 
     previousHash = entry.payloadHash;
@@ -689,6 +691,7 @@ const EVIDENCE_HASH_FIELD: Readonly<Record<string, string>> = {
  */
 function checkInlinedEvidence(
   entry: NormalizedEntry,
+  body: unknown,
   result: ChainEntryResult,
   optionalChecks: Record<OptionalCheck, CheckApplicability>,
   counts: EvidenceBindingCounts,
@@ -699,7 +702,6 @@ function checkInlinedEvidence(
     counts.failed++;
     return failAfterSignature(entry, result, 'CHAIN_EVIDENCE_BINDING_MISMATCH', detail);
   };
-  const body = entry.inlinedEvidence!.value;
   if (entry.binding === undefined) {
     return failed('The entry inlines an evidence body but carries no payload, so no signed hash binds the body to the chain.');
   }

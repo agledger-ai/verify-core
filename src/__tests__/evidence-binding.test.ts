@@ -7,12 +7,11 @@
  * `evidenceHash` (`export-encrypted-evidence.json`).
  */
 import { readFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { verifyAuditExport, type RecordAuditExportInput } from '../index.js';
 
-const LIVE = join(dirname(fileURLToPath(import.meta.url)), 'fixtures', 'live-2.2.0');
+const LIVE = join(import.meta.dirname, 'fixtures', 'live-2.2.0');
 const load = (name: string) => JSON.parse(readFileSync(join(LIVE, name), 'utf8')) as RecordAuditExportInput;
 const anchorOf = (exp: RecordAuditExportInput) => [exp.exportMetadata.anchoredFrom!];
 const entryOf = (exp: RecordAuditExportInput, type: string) => exp.entries.find((e) => e.entryType === type)!;

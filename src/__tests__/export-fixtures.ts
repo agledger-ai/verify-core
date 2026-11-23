@@ -1,14 +1,13 @@
 import { readFileSync } from 'node:fs';
 import { createHash, sign } from 'node:crypto';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { join } from 'node:path';
 import { decode as cborDecode, encode as cborEncode, rfc8949EncodeOptions } from 'cborg';
 import type { RecordAuditExportInput } from '../audit-export.js';
 import { T0, T1, makeKey, ms, statement, type Stored, type TestKey } from './key-statements-helpers.js';
 
 /** Corpus exports, and what the holder of a vault key can build from one. */
 
-const EXPORT_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'testdata', 'conformance', 'export');
+const EXPORT_DIR = join(import.meta.dirname, '..', '..', 'testdata', 'conformance', 'export');
 export const load = (name: string): RecordAuditExportInput =>
   JSON.parse(readFileSync(join(EXPORT_DIR, name), 'utf8')) as RecordAuditExportInput;
 

@@ -415,16 +415,19 @@ function normalizeDistrusted(raw: ReadonlyArray<string | DistrustedKey> | undefi
   if (!Array.isArray(raw)) throw new TypeError('distrustedKeys must be an array.');
   const strings = raw.filter((d): d is string => typeof d === 'string');
   const parsed = parseDistrustedKeys(strings);
-  for (const d of raw) {
-    if (typeof d === 'string') continue;
-    if (d === null || typeof d !== 'object' || typeof d.spkiSha256 !== 'string' || !HEX64.test(d.spkiSha256)
-      || (d.cutoff !== null && (typeof d.cutoff !== 'string' || !INSTANT_US.test(d.cutoff)))) {
+  const entries: ReadonlyArray<unknown> = raw;
+  for (const item of entries) {
+    if (typeof item === 'string') continue;
+    const d: { spkiSha256?: unknown; cutoff?: unknown } = item !== null && typeof item === 'object' ? item : {};
+    const { spkiSha256, cutoff } = d;
+    if (typeof spkiSha256 !== 'string' || !HEX64.test(spkiSha256)
+      || (cutoff !== null && (typeof cutoff !== 'string' || !INSTANT_US.test(cutoff)))) {
       throw new TypeError('distrustedKeys entry is not { spkiSha256: <64 lowercase hex>, cutoff: <microsecond RFC 3339 UTC instant> | null }.');
     }
-    if (parsed.some((p) => p.spkiSha256 === d.spkiSha256)) {
-      throw new TypeError(`distrustedKeys names sha256:${d.spkiSha256} twice. Give each key one entry, with the earliest instant it may have leaked.`);
+    if (parsed.some((p) => p.spkiSha256 === spkiSha256)) {
+      throw new TypeError(`distrustedKeys names sha256:${spkiSha256} twice. Give each key one entry, with the earliest instant it may have leaked.`);
     }
-    parsed.push({ spkiSha256: d.spkiSha256, cutoff: d.cutoff });
+    parsed.push({ spkiSha256, cutoff });
   }
   return parsed;
 }
@@ -473,8 +476,8 @@ function decodeSign1(raw: unknown): Sign1 | null {
     if (!(p instanceof Uint8Array) || !(payload instanceof Uint8Array) || !(sig instanceof Uint8Array)) return null;
     const header = cborDecode(p, { useMaps: true }) as unknown;
     if (!(header instanceof Map)) return null;
-    const alg = header.get(COSE_HEADER_ALG);
-    const kid = header.get(COSE_HEADER_KID);
+    const alg: unknown = header.get(COSE_HEADER_ALG);
+    const kid: unknown = header.get(COSE_HEADER_KID);
     return {
       protectedBstr: p,
       payloadBstr: payload,
@@ -547,7 +550,7 @@ function decodeKeyStatementPayload(bytes: Uint8Array): KeyStatementPayload | nul
       alg,
       spki: Buffer.from(spki).toString('base64'),
       activatedAt,
-      ...(retiredAt !== undefined ? { retiredAt: retiredAt as string } : {}),
+      ...(retiredAt !== undefined ? { retiredAt } : {}),
     },
   };
   if (r['endorser'] !== undefined) {
@@ -629,7 +632,7 @@ function checkKeyStatement(
   const sigs = cose.map((b) => decodeSign1(b));
   if (sigs.length === 0 || sigs.some((s) => s === null)) return invalid('a signature does not decode as a tagged COSE_Sign1');
   const parts = sigs.filter((x): x is Sign1 => x !== null);
-  const first = parts[0]!;
+  const first = parts[0];
   if (!parts.every((p) => Buffer.from(p.payloadBstr).equals(Buffer.from(first.payloadBstr)))) {
     return invalid('the signatures do not cover the same payload');
   }
@@ -679,7 +682,7 @@ function checkKeyStatement(
   let subjectSigned = false;
   let endorserSigned = false;
   for (const [i, want] of expected.entries()) {
-    const outcome = checkSignature(parts[i]!, want.key, want.kid);
+    const outcome = checkSignature(parts[i], want.key, want.kid);
     if (outcome === 'bad') return invalid(`signature ${i + 1} does not verify under the key it names`, payload);
     if (outcome === 'unsupported') unsupported = true;
     const bySubject = payload.typ === 'genesis' || (payload.typ === 'succession' && i === 1);
@@ -752,8 +755,8 @@ function signedAfterWrite(signed: string, s: { written: { us: number; micro: boo
 
 /** The earlier of an instant a statement signs and its write time (see {@link signedAfterWrite}). */
 function notAfterWrite(signed: string, s: { written: { us: number; micro: boolean } | null; storedMs: number }): string {
-  if (!signedAfterWrite(signed, s)) return signed;
-  return instantOfUs(s.written!.micro ? s.written!.us : s.storedMs * 1000);
+  if (s.written === null || !signedAfterWrite(signed, s)) return signed;
+  return instantOfUs(s.written.micro ? s.written.us : s.storedMs * 1000);
 }
 
 /** The instant a statement signs, which orders it when the source carries no write time. */
@@ -794,7 +797,10 @@ export function computeKeyTrust(input: ComputeKeyTrustInput): KeyTrust {
   }
   const anchors = new Set(anchorDigests);
   const distrustedKeys = normalizeDistrusted(input.distrustedKeys);
-  if (!Array.isArray(input.statements) || !Array.isArray(input.keys)) {
+  // Checked through `unknown` copies so the guard does not retype `input.statements` and `input.keys` as `any[]`.
+  const rawStatements: unknown = input.statements;
+  const rawKeys: unknown = input.keys;
+  if (!Array.isArray(rawStatements) || !Array.isArray(rawKeys)) {
     throw new TypeError('computeKeyTrust takes arrays of keys and statements.');
   }
 
@@ -821,7 +827,7 @@ export function computeKeyTrust(input: ComputeKeyTrustInput): KeyTrust {
     // The same row however its time and id are spelled: `Z` or `+00:00`, a
     // uuid in either case.
     const at = instantUs(s.createdAt ?? '');
-    const key = order === 'written' ? JSON.stringify([s.id.toLowerCase(), Number.isNaN(at.us) ? s.createdAt : at.us, bytes]) : bytes;
+    const key = order === 'written' && typeof s.id === 'string' ? JSON.stringify([s.id.toLowerCase(), Number.isNaN(at.us) ? s.createdAt : at.us, bytes]) : bytes;
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
@@ -850,7 +856,7 @@ export function computeKeyTrust(input: ComputeKeyTrustInput): KeyTrust {
   // the Server writes one on every row, so it was edited, and it admits nothing.
   const checked = statementInputs.map((st) => {
     const c = checkKeyStatement(st, keyByDigest);
-    if (order !== 'written' || !Number.isNaN(rfc3339Ms(st.createdAt!))) return c;
+    if (order !== 'written' || !Number.isNaN(rfc3339Ms(st.createdAt ?? ''))) return c;
     return { ...c, verdict: 'invalid' as const, detail: 'the row has no parseable created_at to order it by' };
   });
   // Under the write order: `createdAt` at the precision given, then `id` for
@@ -860,7 +866,7 @@ export function computeKeyTrust(input: ComputeKeyTrustInput): KeyTrust {
   type Placed = { c: CheckedKeyStatement; i: number; k: number | string; micro: boolean; r: number };
   const place = (c: CheckedKeyStatement, i: number): Placed => {
     if (order === 'written') {
-      const at = instantUs(c.input.createdAt!);
+      const at = instantUs(c.input.createdAt ?? '');
       return { c, i, k: Number.isNaN(at.us) ? Number.POSITIVE_INFINITY : at.us, micro: at.micro, r: 0 };
     }
     return { c, i, k: signedInstantOf(c) ?? '￿', micro: false, r: closureLast(c) };
@@ -905,7 +911,7 @@ export function computeKeyTrust(input: ComputeKeyTrustInput): KeyTrust {
       subject: c.payload.subject.spkiSha256,
       endorser: c.payload.endorser?.spkiSha256 ?? null,
       at,
-      storedMs: typeof k === 'number' ? rfc3339Ms(c.input.createdAt!) : instantMs(k),
+      storedMs: typeof k === 'number' ? rfc3339Ms(c.input.createdAt ?? '') : instantMs(k),
       written: typeof k === 'number' ? { us: k, micro } : null,
     }]);
   const valid = inWriteOrder.filter((s) => s.check.verdict === 'valid');
@@ -1037,7 +1043,9 @@ export function computeKeyTrust(input: ComputeKeyTrustInput): KeyTrust {
     for (const s of valid) {
       if (s.subject !== d || s.payload.typ !== 'closure' || s.endorser === null || distrust.has(s.endorser)
         || !clearOfDistrust.has(s.endorser) || !trusted.has(s.endorser)) continue;
-      const retiredAt = notAfterWrite(s.payload.subject.retiredAt!, s);
+      const signedRetiredAt = s.payload.subject.retiredAt;
+      if (signedRetiredAt === undefined) continue;
+      const retiredAt = notAfterWrite(signedRetiredAt, s);
       if (retiredBy === null || retiredAt < retiredBy) retiredBy = retiredAt;
     }
     distrustSpans.set(d, { cutoff: span.cutoff, retiredAt: retiredBy });
@@ -1138,7 +1146,9 @@ export function computeKeyTrust(input: ComputeKeyTrustInput): KeyTrust {
       // cutoff: it admits nothing, but a statement the Server would count is
       // no finding. It still dates windows and cuts edges back, so it can
       // only narrow trust. The checks below still apply to it.
-      const cutoff = cutoffs.get(e)!;
+      const cutoff = cutoffs.get(e);
+      // Unreachable: a signer voided here has a cutoff with an instant (see voidedByStoredTime).
+      if (cutoff === null || cutoff === undefined) throw new TypeError(`The distrusted key ${e} has no cutoff instant.`);
       notes.push({
         keyId: s.payload.subject.kid,
         statementId: s.check.id,
@@ -1266,9 +1276,9 @@ export function computeKeyTrust(input: ComputeKeyTrustInput): KeyTrust {
   // Keys an admission names that this walk could not verify. A key document
   // carries a key's admissions but not every endorser, so the walk can date a
   // trusted key's window earlier than the Server did, or not at all.
-  const unverifiedAdmission = new Set(checked
-    .filter((c) => c.verdict === 'invalid' && c.payload !== null && c.payload.typ !== 'closure')
-    .map((c) => c.payload!.subject.spkiSha256));
+  const unverifiedAdmission = new Set(checked.flatMap((c) => (
+    c.verdict === 'invalid' && c.payload !== null && c.payload.typ !== 'closure' ? [c.payload.subject.spkiSha256] : []
+  )));
 
   // A listed retirement the walk does not sign, read against the Server's own
   // distrust instant (`distrustedFrom`): where the listing was cut at that
@@ -1509,7 +1519,9 @@ export interface VerificationKeysDocument {
  * statement format this verifier does not read.
  */
 export function keyStatementsFromVerificationKeys(doc: VerificationKeysDocument): { keys: TrustKeyInput[]; statements: KeyStatementInput[] } {
-  if (doc === null || typeof doc !== 'object' || !Array.isArray(doc.data)) {
+  // Checked through an `unknown` copy so the guard does not retype `doc.data` as `any[]`.
+  const rawData: unknown = doc?.data;
+  if (doc === null || typeof doc !== 'object' || !Array.isArray(rawData)) {
     throw new TypeError('Expected the /v1/verification-keys document: { data: [...], keyStatementFormat, anchoredFrom }.');
   }
   if (doc.keyStatementFormat !== undefined && doc.keyStatementFormat !== KEY_STATEMENT_CTY) {

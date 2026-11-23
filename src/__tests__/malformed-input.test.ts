@@ -1,7 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { join } from 'node:path';
 import { verifyAuditExport } from '../audit-export.js';
 import { underAdmittedKey } from './export-fixtures.js';
 import type { RecordAuditExportInput } from '../audit-export.js';
@@ -22,7 +21,7 @@ import {
  * Every case is a mutation of a real corpus vector.
  */
 
-const HERE = dirname(fileURLToPath(import.meta.url));
+const HERE = import.meta.dirname;
 const CONFORMANCE_DIR = join(HERE, '..', '..', 'testdata', 'conformance');
 
 function load<T = RecordAuditExportInput>(rel: string): T {
@@ -239,7 +238,7 @@ describe('dump key rows the walk cannot read', () => {
   it('a statement row with no created_at is KEY_STATEMENT_INVALID, not a throw', () => {
     for (const blank of [undefined, null, 7, 'garbage']) {
       const rows = statements.map((r) => ({ ...r }));
-      const row = rows[rows.length - 1] as unknown as Record<string, unknown>;
+      const row = rows.at(-1) as unknown as Record<string, unknown>;
       if (blank === undefined) delete row['created_at'];
       else row['created_at'] = blank;
       const trust = computeKeyTrust({

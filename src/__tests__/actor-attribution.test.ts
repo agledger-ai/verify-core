@@ -1,7 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { join } from 'node:path';
 import { verifyAuditExport } from '../audit-export.js';
 import type { RecordAuditExportInput } from '../audit-export.js';
 import { decodeCoseSign1, extractActorClaim } from '../primitives.js';
@@ -23,7 +22,7 @@ import { decodeCoseSign1, extractActorClaim } from '../primitives.js';
  * and a live 2.0.0 lifecycle export (agent actor).
  */
 
-const HERE = dirname(fileURLToPath(import.meta.url));
+const HERE = import.meta.dirname;
 const EXPORT_DIR = join(HERE, '..', '..', 'testdata', 'conformance', 'export');
 const LIVE_DIR = join(HERE, 'fixtures', 'live-2.0.0');
 

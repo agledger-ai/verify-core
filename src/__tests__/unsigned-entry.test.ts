@@ -1,7 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { join } from 'node:path';
 import { verifyAuditExport } from '../audit-export.js';
 import type { RecordAuditExportInput, SigningKeyWindow } from '../audit-export.js';
 import {
@@ -28,7 +27,7 @@ import type { FailureCode } from '../failures.js';
  * `unsigned.json` (written before any key was registered).
  */
 
-const HERE = dirname(fileURLToPath(import.meta.url));
+const HERE = import.meta.dirname;
 const CONFORMANCE_DIR = join(HERE, '..', '..', 'testdata', 'conformance');
 
 function load<T = RecordAuditExportInput>(rel: string): T {
@@ -181,7 +180,7 @@ describe('rule 2: an unsigned entry written once the install signs', () => {
   it("prefers the caller's window for a key over the export's, as the key-window check does", () => {
     const exp = validAllNulled();
     const { keyId } = realWindow();
-    const lastCreated = exp.entries[exp.entries.length - 1]!.createdAt!;
+    const lastCreated = exp.entries.at(-1)!.createdAt!;
     const spki = load<Record<string, string>>('export/keys-oob.json')[keyId]!;
     const result = verifyAuditExport(exp, {
       publicKeys: [{ keyId, publicKey: spki, activatedAt: shiftMs(lastCreated, 1), retiredAt: null }],

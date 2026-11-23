@@ -1,8 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { join } from 'node:path';
 import { orgReadLeafHash, orgReadMerkleRoot, verifyOrgReadInclusion } from '../primitives.js';
 
 /**
@@ -94,7 +93,7 @@ describe('org-read Merkle primitives (RFC 9162 §2.1, hex)', () => {
     const rootOf = (leaf: string, m: number, n: number, siblings: readonly string[]): string => {
       if (n === 1) return leaf;
       const k = splitBelow(n);
-      const last = siblings[siblings.length - 1]!;
+      const last = siblings.at(-1)!;
       const rest = siblings.slice(0, -1);
       return m < k ? NODE(rootOf(leaf, m, k, rest), last) : NODE(last, rootOf(leaf, m - k, n - k, rest));
     };
@@ -125,7 +124,7 @@ describe('org-read Merkle primitives (RFC 9162 §2.1, hex)', () => {
   });
 });
 
-const DUMP_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'testdata', 'conformance', 'dump');
+const DUMP_DIR = join(import.meta.dirname, '..', '..', 'testdata', 'conformance', 'dump');
 
 function ndjson<T>(vector: string, file: string): T[] {
   return readFileSync(join(DUMP_DIR, vector, file), 'utf8')

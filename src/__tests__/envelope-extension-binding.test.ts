@@ -1,7 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { join } from 'node:path';
 import { verifyAuditExport } from '../audit-export.js';
 import type { RecordAuditExportInput } from '../audit-export.js';
 import { resignedUnder } from './export-fixtures.js';
@@ -14,7 +13,7 @@ import { makeKey } from './key-statements-helpers.js';
  * unmodified live 2.0.0 exports (see agent-signature.test.ts).
  */
 
-const LIVE = join(dirname(fileURLToPath(import.meta.url)), 'fixtures', 'live-2.0.0');
+const LIVE = join(import.meta.dirname, 'fixtures', 'live-2.0.0');
 
 type Entry = { payload?: Record<string, unknown> };
 

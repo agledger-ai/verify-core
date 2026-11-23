@@ -1,7 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { join } from 'node:path';
 import { verifyAuditExport } from '../audit-export.js';
 import type { RecordAuditExportInput } from '../audit-export.js';
 import { reportKeyTrust, settleKeyTrust } from '../key-statements.js';
@@ -14,7 +13,7 @@ import { reportKeyTrust, settleKeyTrust } from '../key-statements.js';
  * the detail says so.
  */
 
-const HERE = dirname(fileURLToPath(import.meta.url));
+const HERE = import.meta.dirname;
 const CONFORMANCE_DIR = join(HERE, '..', '..', 'testdata', 'conformance');
 
 function load(rel: string): RecordAuditExportInput {

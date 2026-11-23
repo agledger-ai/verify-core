@@ -1,7 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { join } from 'node:path';
 import { buildKeyRegistry, earliestKeyActivation, verifyChain, type NormalizedEntry } from '../chain.js';
 import {
   applyKeyTrust,
@@ -22,7 +21,7 @@ import type { FailureCode } from '../failures.js';
  * every vector that pins `trustAnchors` to its expected verdict.
  */
 
-const CORPUS = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'testdata', 'conformance');
+const CORPUS = join(import.meta.dirname, '..', '..', 'testdata', 'conformance');
 
 interface DumpVector {
   file: string;

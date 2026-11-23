@@ -1,7 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { join } from 'node:path';
 import { verifyAuditExport } from '../audit-export.js';
 import type { RecordAuditExportInput } from '../audit-export.js';
 
@@ -14,7 +13,7 @@ import type { RecordAuditExportInput } from '../audit-export.js';
  * were written before any key was registered.
  */
 
-const HERE = dirname(fileURLToPath(import.meta.url));
+const HERE = import.meta.dirname;
 const EXPORT_DIR = join(HERE, '..', '..', 'testdata', 'conformance', 'export');
 
 function load(name: string): RecordAuditExportInput {
