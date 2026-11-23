@@ -391,7 +391,9 @@ export interface VerifyExportResult {
   /**
    * `trusted`, `unanchored` or `failed` (see `Verdict`). Read this rather
    * than `valid` alone: a valid result with no `trustAnchors`, or none that
-   * anchored a signature, is `unanchored`, which is not a trusted verdict.
+   * anchored a signature, is `unanchored`, which is not a trusted verdict. So
+   * is a pinned result that failed only because the pin anchored no signature
+   * (`valid: false`; see `verdictOf`).
    */
   verdict: Verdict;
 }
@@ -611,7 +613,10 @@ export function verifyAuditExport(
     evidenceBinding: chain.evidenceBinding,
     entryCount: count.entryCount,
     keyTrust,
-    verdict: verdictOf({ valid, keyTrust }),
+    verdict: verdictOf({ valid, keyTrust }, () => {
+      const { trustAnchors: _pinned, distrustedKeys: _distrusted, ...unpinned } = options;
+      return verifyAuditExport(exportData, unpinned).valid;
+    }),
   };
 }
 

@@ -1600,14 +1600,37 @@ export type KeyTrustStatus = 'walked' | 'no_anchor' | 'no_anchored_signature';
  * The one-word reading of a verification result, as every surface prints it:
  * `failed` when it is not valid, `trusted` when it is valid and the walk
  * anchored a signature (`keyTrust.status: 'walked'`), and `unanchored` when it
- * is valid but rests on nothing pinned. Read this rather than `valid` alone: a
- * valid result with no `trustAnchors` is `unanchored`.
+ * is valid but rests on nothing pinned, or when the only thing that failed is
+ * that nothing is signed by a key the pinned trustAnchors anchor (see
+ * {@link verdictOf}). Read this rather than `valid` alone: a valid result with
+ * no `trustAnchors` is `unanchored`.
  */
 export type Verdict = 'trusted' | 'unanchored' | 'failed';
 
-/** The {@link Verdict} of a result that carries `valid` and a `keyTrust` report. */
-export function verdictOf(result: { valid: boolean; keyTrust: Pick<KeyTrustReport, 'status'> }): Verdict {
-  if (!result.valid) return 'failed';
+/**
+ * The {@link Verdict} of a result that carries `valid` and a `keyTrust` report.
+ *
+ * Pass `passesUnpinned` on a run that supplied trustAnchors: it reruns the
+ * same input with the same options minus `trustAnchors` and `distrustedKeys`
+ * and says whether that run is valid. A pinned run that failed, whose walk
+ * anchored no key at all, and whose unpinned rerun passes, is `unanchored`
+ * rather than `failed`: the only thing wrong is that the pin reaches nothing
+ * in the artifact (the key-statement findings and CHAIN_SIGNING_KEY_UNANCHORED
+ * entries such a walk reports all follow from that). That is an export checked
+ * against another Server's pin, and equally one re-signed wholesale under keys
+ * of its own; neither is trusted, and the result keeps `valid: false`. An
+ * artifact in which the pin anchors even one key stays `failed`, since an
+ * entry beside it under an unanchored key is a substitution.
+ */
+export function verdictOf(
+  result: { valid: boolean; keyTrust: Pick<KeyTrustReport, 'status' | 'anchoredKeyIds'> },
+  passesUnpinned?: () => boolean,
+): Verdict {
+  if (!result.valid) {
+    const pinNotMet = result.keyTrust.status === 'no_anchored_signature' && result.keyTrust.anchoredKeyIds.length === 0
+      && passesUnpinned !== undefined && passesUnpinned();
+    return pinNotMet ? 'unanchored' : 'failed';
+  }
   return result.keyTrust.status === 'walked' ? 'trusted' : 'unanchored';
 }
 

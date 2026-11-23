@@ -166,7 +166,13 @@ statements sign. `keyTrust.status` says whether a pass can be trusted:
 
 A pass on `no_anchor` or `no_anchored_signature` is not a trusted verdict; the
 `detail` says so, and `verdict` (and every AGLedger surface) reports it as
-`unanchored`. `distrustedKeys` without `trustAnchors` throws `TypeError`, since
+`unanchored`. So is a pinned result that fails only because the pin reaches no
+key in the export at all, as with an export checked against another Server's
+pin: `valid` is false, but the same export verified without the pin passes,
+so nothing in it was tampered with, and the verdict says the pin was not met
+rather than `failed`. Once the pin anchors any key, an entry under a key it
+does not reach is a substitution and the verdict is `failed`.
+`distrustedKeys` without `trustAnchors` throws `TypeError`, since
 nothing would apply them, and so does a pinned key distrusted with no instant,
 which the Server refuses to start with. A pin beside a dated entry
 (`sha256:<hex>@<instant>`) is how a leaked key's history stays verifiable: the

@@ -51,6 +51,26 @@ describe('verifyAuditExport with trustAnchors', () => {
     expect(r.keyTrust.anchoredFromPinned).toBe(false);
   });
 
+  it('pinned on another key, an untampered export is unanchored, not failed: the pin was not met, nothing was tampered with', () => {
+    const r = verifyAuditExport(load('valid.json'), { trustAnchors: [STRANGER] });
+    expect(r.valid).toBe(false);
+    expect(r.keyTrust.status).toBe('no_anchored_signature');
+    expect(r.verdict).toBe('unanchored');
+  });
+
+  it('pinned on another key, a tampered export still fails: the unpinned rerun is what decides', () => {
+    for (const name of ['hash-mismatch.json', 'signature-invalid.json', 'link-broken.json', 'payload-binding-mismatch.json']) {
+      const exp = load(name);
+      expect(verifyAuditExport(exp).valid, name).toBe(false);
+      expect(verifyAuditExport(exp, { trustAnchors: [STRANGER] }).verdict, name).toBe('failed');
+    }
+  });
+
+  it('pinned on the right key, one entry under an unanchored key is a substitution and fails', () => {
+    const exp = load('key-substitution.json');
+    expect(verifyAuditExport(exp, { trustAnchors: [pinOf(exp)] }).verdict).toBe('failed');
+  });
+
   it('an embedded key with no statement is unanchored: the key-substitution fixture fails without a key policy', () => {
     const exp = load('key-substitution.json');
     expect(verifyAuditExport(exp).valid).toBe(true);
