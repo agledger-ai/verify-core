@@ -21,7 +21,9 @@ import type { AgentPublicKeyJwk } from '../primitives.js';
  * unbound delegated create, and a delegation chain: a root the cert agent
  * opened naming a second cert agent as performer, and the child that agent
  * delegated under it. `agent-cert-key.json` is the Ed25519 JWK the first agent
- * sent at cert exchange; the second agent's key was not kept. The synthetic
+ * sent at cert exchange; the second agent's key was not kept.
+ * scripts/capture-live-fixtures/capture.mjs drives a Server through this
+ * scenario set to re-capture them. The synthetic
  * cases below cover what a live Server will not
  * produce: a sealed agent signature that does not verify.
  */
