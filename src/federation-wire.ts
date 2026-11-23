@@ -416,12 +416,11 @@ export function extractFederationWire(payload: Record<string, unknown>): Federat
 export type FederationWireOutcome =
   /**
    * The hash, the entry's fields and, under a supplied key, the signature all
-   * hold. `afterRetirement`: the key the message is sealed under was retired,
-   * by a succession it signed, before the sender signed the message. The
-   * receiver accepts the old key until it revokes the peer, so a publisher
-   * process not yet restarted onto the new key sends exactly this; it is in
-   * order when the receiver's `federation.peer_revoked` audit row for the
-   * publisher comes after the entry.
+   * hold. `afterRetirement` (only with `allowAfterRetirement`): the key the
+   * message is sealed under was retired, by a succession it signed, before the
+   * sender signed the message. The receiver accepts the old key until it
+   * revokes the peer, so a publisher process not yet restarted onto the new
+   * key sends exactly this for a short gap.
    */
   | { outcome: 'ok'; signatureChecked: boolean; afterRetirement: boolean }
   /** No key was supplied for `senderHubId`; the hash and the entry's fields hold, the signature was not checked. */
@@ -435,19 +434,19 @@ export type FederationWireOutcome =
  * The receiver projects these from the message, so a disagreement means the
  * entry says something the sender did not sign.
  */
-const FIELD_PAIRS: Readonly<Record<string, ReadonlyArray<readonly [string, string]>>> = {
+const FIELD_PAIRS: Readonly<Record<string, ReadonlyArray<readonly [entryField: string, bodyField: string, required: boolean]>>> = {
   FEDERATION_STATE_SYNC: [
-    ['state', 'state'],
-    ['recordType', 'type'],
-    ['disputeId', 'disputeId'],
-    ['action', 'action'],
+    ['state', 'state', true],
+    ['recordType', 'type', false],
+    ['disputeId', 'disputeId', false],
+    ['action', 'action', false],
   ],
-  FEDERATION_SIGNAL_RECEIVED: [['recommendation', 'recommendation']],
+  FEDERATION_SIGNAL_RECEIVED: [['recommendation', 'recommendation', true]],
   FEDERATION_CO_SIGN_RESPONDED: [
-    ['recommendation', 'recommendation'],
-    ['state', 'state'],
-    ['outcomeHash', 'outcomeHash'],
-    ['idempotencyKey', 'idempotencyKey'],
+    ['recommendation', 'recommendation', true],
+    ['state', 'state', true],
+    ['outcomeHash', 'outcomeHash', false],
+    ['idempotencyKey', 'idempotencyKey', false],
   ],
 };
 
@@ -458,6 +457,18 @@ const FIELD_PAIRS: Readonly<Record<string, ReadonlyArray<readonly [string, strin
  * so a message signed within this of a key change is on the right key.
  */
 export const FEDERATION_KEY_WINDOW_SKEW_MS = 300_000;
+
+export interface CheckFederationWireOptions {
+  /**
+   * Accept a message signed by a key its history had already retired (beyond
+   * the clock-skew allowance), and count it in `afterRetirement`. A publisher
+   * process not yet restarted onto the new key sends exactly this for a short
+   * gap, and the receiver accepts the old key until it revokes the peer. Off
+   * by default: a retired key signing at any later time is also what a leaked
+   * key does.
+   */
+  allowAfterRetirement?: boolean;
+}
 
 /**
  * Check one sealed message against the entry that carries it, and under the
@@ -480,6 +491,7 @@ export function checkFederationWire(
   payload: Record<string, unknown>,
   wire: FederationWire,
   keys: FederationKeyRegistry | undefined,
+  options: CheckFederationWireOptions = {},
 ): FederationWireOutcome {
   if (wire.scheme !== FEDERATION_WIRE_SCHEME) {
     return { outcome: 'invalid', detail: `Sealed message scheme is ${JSON.stringify(wire.scheme)}, not ${FEDERATION_WIRE_SCHEME}.` };
@@ -512,6 +524,17 @@ export function checkFederationWire(
     expectedRecordId = o.recordId;
   }
   const bodyRecordId = wire.body.recordId;
+  const pairs = FIELD_PAIRS[entryType];
+  if (pairs !== undefined) {
+    // A message of these types is about one record, so a body that names none,
+    // or an entry that names none to compare it with, proves nothing.
+    if (typeof bodyRecordId !== 'string') {
+      return { outcome: 'invalid', detail: `A ${entryType} message must name its record, and the sealed body carries no string recordId.` };
+    }
+    if (expectedRecordId === null) {
+      return { outcome: 'invalid', detail: `A ${entryType} entry carries no record id, so the record the sealed message names (${bodyRecordId}) cannot be compared with it.` };
+    }
+  }
   if (expectedRecordId !== null && typeof bodyRecordId === 'string' && bodyRecordId.toLowerCase() !== expectedRecordId.toLowerCase()) {
     return {
       outcome: 'invalid',
@@ -521,10 +544,23 @@ export function checkFederationWire(
           : `Entry origin names record ${expectedRecordId}, the sealed message names record ${bodyRecordId}.`,
     };
   }
-  for (const [entryField, bodyField] of FIELD_PAIRS[entryType] ?? []) {
+  for (const [entryField, bodyField, required] of pairs ?? []) {
     const mine = payload[entryField];
     const theirs = wire.body[bodyField];
-    if (mine === undefined || theirs === undefined || mine === null || theirs === null) continue;
+    const mineAbsent = mine === undefined || mine === null;
+    const theirsAbsent = theirs === undefined || theirs === null;
+    if (mineAbsent && theirsAbsent) {
+      if (!required) continue;
+      return { outcome: 'invalid', detail: `A ${entryType} entry must carry ${entryField}, and neither the entry nor the sealed message's ${bodyField} does.` };
+    }
+    if (mineAbsent || theirsAbsent) {
+      return {
+        outcome: 'invalid',
+        detail: mineAbsent
+          ? `The sealed message's ${bodyField} is ${canonicalizeJson(theirs)} and the entry carries no ${entryField}: the entry leaves out what the sender signed.`
+          : `Entry ${entryField} is ${canonicalizeJson(mine)} and the sealed message carries no ${bodyField}: the entry asserts what the sender did not sign.`,
+      };
+    }
     if (canonicalizeJson(mine) !== canonicalizeJson(theirs)) {
       return {
         outcome: 'invalid',
@@ -559,6 +595,12 @@ export function checkFederationWire(
       };
     }
     afterRetirement = key.retiredAt !== null && at > rfc3339Ms(key.retiredAt) + FEDERATION_KEY_WINDOW_SKEW_MS;
+    if (afterRetirement && options.allowAfterRetirement !== true) {
+      return {
+        outcome: 'invalid',
+        detail: `Sealed message from ${wire.senderHubId} is signed at ${wire.timestamp} under a federation key its history retired at ${key.retiredAt}, more than ${FEDERATION_KEY_WINDOW_SKEW_MS / 1000}s before the sender signed it. A retired key signing is what a leaked key does; if the sender's publisher was only slow to restart onto its new key, pass allowAfterRetirement.`,
+      };
+    }
   }
   const ed25519 = algorithmByName('Ed25519');
   if (ed25519 === null || !runtimeCanCompute(ed25519)) {

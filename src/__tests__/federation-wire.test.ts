@@ -191,6 +191,46 @@ describe('a sealed federation message on a receiver\'s chain', () => {
     expect(r.brokenAt?.detail).toContain('Entry state is "CANCELLED"');
   });
 
+  it('fails a state sync whose sealed body names no record, and one whose body names a non-string', () => {
+    for (const recordIdValue of [undefined, null, 7]) {
+      const { recordId: _omit, ...rest } = body;
+      const bare = recordIdValue === undefined ? rest : { ...rest, recordId: recordIdValue };
+      const exp = exportWithWire(vault, AT, projection(sealed(sender, bare)));
+      const r = verifyAuditExport(exp);
+      expect(r.valid, String(recordIdValue)).toBe(false);
+      expect(r.brokenAt).toMatchObject({ position: AT + 1, code: 'CHAIN_FEDERATION_WIRE_INVALID' });
+      expect(r.brokenAt?.detail).toContain('must name its record');
+    }
+  });
+
+  it('fails when only one side of a compared field is present', () => {
+    const { state: _s, ...noState } = body;
+    const missingInBody = verifyAuditExport(exportWithWire(vault, AT, projection(sealed(sender, noState))));
+    expect(missingInBody.valid).toBe(false);
+    expect(missingInBody.brokenAt?.detail).toContain('the entry asserts what the sender did not sign');
+    const missingInEntry = verifyAuditExport(exportWithWire(vault, AT, projection(sealed(sender, body), { recordType: null })));
+    expect(missingInEntry.valid).toBe(false);
+    expect(missingInEntry.brokenAt?.detail).toContain('leaves out what the sender signed');
+    const optionalOnBoth = verifyAuditExport(exportWithWire(vault, AT, projection(sealed(sender, body))));
+    expect(optionalOnBoth.valid).toBe(true);
+  });
+
+  it('fails an entry with no payload or entryType once federation keys are supplied, and marks the check not_checked', () => {
+    const exp = exportWithWire(vault, AT, projection(sealed(sender, body)));
+    for (const field of ['payload', 'entryType'] as const) {
+      const cut = structuredClone(exp);
+      if (field === 'payload') delete cut.entries[AT + 1]!.payload;
+      else delete cut.entries[AT + 1]!.entryType;
+      const plain = verifyAuditExport(cut);
+      expect(plain.valid, field).toBe(false);
+      expect(plain.brokenAt).toMatchObject({ position: AT + 2, code: 'CHAIN_PAYLOAD_BINDING_MISMATCH' });
+      expect(plain.optionalChecks.payload_binding).toBe('not_checked');
+      const keyed = verifyAuditExport(cut, { federationKeys: { [SENDER_HUB]: sender.publicKey } });
+      expect(keyed.valid).toBe(false);
+      expect(keyed.optionalChecks.federation_wire).toBe('not_checked');
+    }
+  });
+
   it('fails when the entry names a peer other than the sealed sender', () => {
     const exp = exportWithWire(vault, AT, projection(sealed(sender, body), { peerHubId: 'hub-other' }));
     const r = verifyAuditExport(exp);
@@ -373,9 +413,20 @@ describe('a sealed federation message under a key the sender has since changed',
     }
   });
 
-  it('verifies but counts a message signed under a key more than the allowance after the key was retired', () => {
+  it('fails a message signed under a key more than the allowance after the key was retired', () => {
     const r = verifyAuditExport(exportUnder(k('K1'), '2026-11-05T04:27:03.324Z'), {
       federationKeys: [{ hubId: hub, publicKey: k('K3').publicKey, history: succession }],
+    });
+    expect(r.valid).toBe(false);
+    expect(r.brokenAt?.code).toBe('CHAIN_FEDERATION_WIRE_INVALID');
+    expect(r.brokenAt?.detail).toMatch(/retired at 2026-11-05T04:22:03\.323630Z/);
+    expect(r.federationWire.afterRetirement).toBe(0);
+  });
+
+  it('verifies but counts that message when allowAfterRetirement is given', () => {
+    const r = verifyAuditExport(exportUnder(k('K1'), '2026-11-05T04:27:03.324Z'), {
+      federationKeys: [{ hubId: hub, publicKey: k('K3').publicKey, history: succession }],
+      allowAfterRetirement: true,
     });
     expect(r.valid).toBe(true);
     expect(r.federationWire).toEqual({ present: 1, verified: 1, failed: 0, afterRetirement: 1 });

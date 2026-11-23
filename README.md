@@ -106,11 +106,32 @@ cannot turn a check off without a word.
   latest checkpoint) fails `CHECKPOINT_ROW_MISSING`, and fewer than
   `exportMetadata.totalEntries` (what the Server wrote) fails
   `CHAIN_POSITION_GAP`. `result.entryCount` reports both, each null when the
-  export does not state it.
+  export does not state it. Those counts sit in unsigned metadata, which
+  whoever cut the chain can also edit, so pass the count you obtained out of
+  band as `expectedEntryCount`: an export carrying a different number of
+  entries fails `CHAIN_POSITION_GAP`. `optionalChecks.entry_count` is
+  `applied` when any count was held and `skipped_no_input` when none was.
+- **The record id**: `result.recordId` is the id the entries sign, never the
+  unsigned `exportMetadata.recordId`. A metadata id that disagrees with what
+  the entries sign, or entries that name different records, fails
+  `CHAIN_PAYLOAD_BINDING_MISMATCH`.
+- **The format**: an export that does not state `exportFormatVersion` and
+  `canonicalization`, or states others than this verifier reads, fails
+  `UNSUPPORTED_FORMAT`.
 
 The payload, OIDC, attribution and key-window checks run when the export
-carries their inputs, which every current Server does. The result's `optionalChecks` says
+carries their inputs, which every current Server does. Once one entry carries
+its `payload` and `entryType`, or you pass `federationKeys`, an entry without
+them fails `CHAIN_PAYLOAD_BINDING_MISMATCH` and the check reads `not_checked`,
+so deleting them cannot switch a check off. The result's `optionalChecks` says
 which ran, so "not checked" never reads as "passed".
+
+### SCITT receipts
+
+`verifyAuditExport` does not verify receipts. Verify each Receipt (an export
+taken with `?receipts=true` carries them) by calling
+`verifyReceipt(receiptBytes, signedStatementBytes, transparencyServicePublicKeyBase64)`,
+which returns `'ok'` or the reason it failed.
 
 ## Anchoring keys
 
@@ -407,11 +428,11 @@ process's clock and the window is the peer's database clock, so each edge
 carries an allowance of 300 seconds (`FEDERATION_KEY_WINDOW_SKEW_MS`), as the
 Server's own receiver guidance gives it. A message signed under a key more
 than that before the key's activation fails. One signed under a key more than
-that after the key's retirement verifies and is counted in
-`federationWire.afterRetirement`: a peer
-process not yet restarted onto the new key sends exactly that, and it is in
-order when the receiver's `federation.peer_revoked` audit row for the peer
-comes after it. A key behind a genesis that named it only by digest
+that after the key's retirement fails `CHAIN_FEDERATION_WIRE_INVALID`, since a
+retired key signing later is also what a leaked key does. Pass
+`allowAfterRetirement: true` for the short gap while a peer's publisher
+restarts onto its new key: such a message then verifies and is counted in
+`federationWire.afterRetirement`. A key behind a genesis that named it only by digest
 (`linked: false`) is not linked to the newer keys; name the hub a second time
 with that key once its operator confirms it. The same goes for a key the
 history does not list at all, such as the key in use before a change made with

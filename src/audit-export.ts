@@ -34,7 +34,7 @@ import {
 import type { FailureCode } from './failures.js';
 import { instantMs } from './instant.js';
 import { assertKnownOptions } from './options.js';
-import type { AgentPublicKeyJwk } from './primitives.js';
+import { decodeCoseSign1, decodePredicate, type AgentPublicKeyJwk } from './primitives.js';
 import { buildFederationKeyRegistry, type FederationKeyEntry } from './federation-wire.js';
 import {
   applyKeyTrust,
@@ -268,6 +268,25 @@ export interface VerifyExportOptions {
    * hub's pins throws `TypeError`.
    */
   federationKeys?: Readonly<Record<string, string>> | ReadonlyArray<FederationKeyEntry>;
+  /**
+   * Accept a sealed federation message signed by a key its sender's history
+   * had already retired (beyond the 300 second clock-skew allowance), counted
+   * in `federationWire.afterRetirement`. For the short gap while a sender's
+   * publisher restarts onto its new key. Without it such a message fails
+   * CHAIN_FEDERATION_WIRE_INVALID, since a retired key signing later is also
+   * what a leaked key does.
+   */
+  allowAfterRetirement?: boolean;
+  /**
+   * The number of entries the record's chain holds, obtained out of band (the
+   * operator's statement, or your own count when you took the export). The
+   * count the export states about itself sits in unsigned metadata, which
+   * whoever removed entries can also remove; this one cannot be edited from
+   * the document. An export carrying a different number of entries fails
+   * CHAIN_POSITION_GAP. A non-negative integer: anything else throws
+   * `TypeError`.
+   */
+  expectedEntryCount?: number;
 }
 
 export interface EntryVerificationResult {
@@ -277,6 +296,14 @@ export interface EntryVerificationResult {
   detail?: string;
   signature?: SignatureOutcome['state'];
 }
+
+/**
+ * The checks `optionalChecks` reports on an export: the chain's, and
+ * `entry_count`, which is `applied` when the chain's length was held to a
+ * count (the export's own `expectedEntries` / `totalEntries`, or the
+ * `expectedEntryCount` option) and `skipped_no_input` when none was given.
+ */
+export type ExportOptionalCheck = OptionalCheck | 'entry_count';
 
 export interface VerifyExportResult {
   valid: boolean;
@@ -299,11 +326,14 @@ export interface VerifyExportResult {
    *   fields stay `skipped_no_input`.
    * - `agent_signature` is `applied` only when `agentKeys` supplied the cert
    *   key for at least one Server-validated agent signature on the chain.
+   * - `entry_count` is `applied` when the chain's length was held to a stated
+   *   or supplied count, and `skipped_no_input` when the export states none
+   *   and `expectedEntryCount` was not given.
    *
    * The applicability is surfaced so a caller never mistakes "not checked
    * here" for "checked and passed".
    */
-  optionalChecks: Record<OptionalCheck, CheckApplicability>;
+  optionalChecks: Record<ExportOptionalCheck, CheckApplicability>;
   /**
    * How many signature checks resolved against supplied vs export-embedded
    * keys. Provenance only; whether a key is trusted is `keyTrust`.
@@ -397,21 +427,29 @@ export function verifyAuditExport(
     throw new TypeError('distrustedKeys act only inside the key-statement walk, which runs from trustAnchors; pass trustAnchors as well.');
   }
   assertNotPinnedAndDistrusted(options.trustAnchors, options.distrustedKeys);
+  if (options.expectedEntryCount !== undefined
+    && !(typeof options.expectedEntryCount === 'number' && Number.isInteger(options.expectedEntryCount) && options.expectedEntryCount >= 0)) {
+    throw new TypeError(`verifyAuditExport: expectedEntryCount must be a non-negative integer (got ${JSON.stringify(options.expectedEntryCount)}).`);
+  }
   const meta = exportData.exportMetadata;
   const entries = exportData.entries ?? [];
 
-  if (meta.exportFormatVersion && meta.exportFormatVersion !== SUPPORTED_FORMAT_VERSION) {
+  if (meta.exportFormatVersion !== SUPPORTED_FORMAT_VERSION) {
     return earlyFailure(
       meta.recordId,
       entries.length,
-      `Unsupported exportFormatVersion ${meta.exportFormatVersion} (this verifier reads ${SUPPORTED_FORMAT_VERSION}).`,
+      meta.exportFormatVersion === undefined || meta.exportFormatVersion === null || meta.exportFormatVersion === ''
+        ? `The export states no exportFormatVersion (this verifier reads ${SUPPORTED_FORMAT_VERSION}).`
+        : `Unsupported exportFormatVersion ${JSON.stringify(meta.exportFormatVersion)} (this verifier reads ${SUPPORTED_FORMAT_VERSION}).`,
     );
   }
-  if (meta.canonicalization && meta.canonicalization !== SUPPORTED_CANONICALIZATION) {
+  if (meta.canonicalization !== SUPPORTED_CANONICALIZATION) {
     return earlyFailure(
       meta.recordId,
       entries.length,
-      `Unsupported canonicalization ${meta.canonicalization} (only ${SUPPORTED_CANONICALIZATION} supported).`,
+      meta.canonicalization === undefined || meta.canonicalization === null || meta.canonicalization === ''
+        ? `The export states no canonicalization (only ${SUPPORTED_CANONICALIZATION} supported).`
+        : `Unsupported canonicalization ${JSON.stringify(meta.canonicalization)} (only ${SUPPORTED_CANONICALIZATION} supported).`,
     );
   }
 
@@ -450,6 +488,12 @@ export function verifyAuditExport(
   const signedActivations = trust === null ? [] : [...trust.byDigest.values()].filter((k) => k.trusted);
   const signingSince = earliestKeyActivation([...resolvedKeys, ...windowOnly, ...signedActivations]);
   const walkReport = reportKeyTrust(keys, trust, meta.anchoredFrom ?? null);
+  // An entry's `payload` and `entryType` are what the binding check and the
+  // federation-wire check read. Once any entry carries them, or the caller
+  // supplied federation keys, an entry without them is a check that cannot
+  // run on it, which is a failure and not a skip.
+  const carriesBinding = (raw: unknown): boolean => isRecord(raw) && (raw.payload !== undefined || raw.entryType !== undefined);
+  const bindingExpected = options.federationKeys !== undefined || entries.some(carriesBinding);
   const normalized: NormalizedEntry[] = entries.map((raw) => {
     // An entry or integrity block that is not an object carries none of the
     // fields the walk reads, and fails CHAIN_MALFORMED_ENTRY there.
@@ -478,6 +522,12 @@ export function verifyAuditExport(
         entryType: e.entryType,
         payload: e.payload,
         extensionsProjected: true,
+      };
+    } else if (bindingExpected) {
+      const missing = [e.payload === undefined ? 'payload' : null, e.entryType === undefined ? 'entryType' : null].filter((m) => m !== null).join(' and ');
+      base.bindingRequired = {
+        detail: `The entry carries no ${missing}, which the binding and federation-wire checks read: ${options.federationKeys !== undefined && !entries.some(carriesBinding) ? 'federationKeys were supplied' : 'other entries of this export carry it'}, so an entry without it cannot be checked.`,
+        federationWire: options.federationKeys !== undefined,
       };
     }
     // An inlined evidence body is unsigned; it is re-bound to the hash the
@@ -516,6 +566,7 @@ export function verifyAuditExport(
     requireSuppliedKeys: options.requireSuppliedKeys,
     agentKeys,
     federationKeys,
+    allowAfterRetirement: options.allowAfterRetirement === true,
     signingSince,
   });
   // Under a walk every key a signature verifies against is anchored, so the
@@ -527,14 +578,15 @@ export function verifyAuditExport(
   // A finding on the key statements has no chain position; it is reported
   // at position 0, the place for findings that precede the walk.
   const registryFinding = keyTrust.findings[0];
-  const count = statedEntryCount(meta, entries.length);
+  const count = statedEntryCount(meta, entries.length, options.expectedEntryCount);
+  const identity = signedRecordId(meta.recordId, entries);
   const brokenAt = chain.brokenAt
     ? { position: chain.brokenAt.position, code: chain.brokenAt.code, detail: chain.brokenAt.detail }
     : registryFinding
       ? { position: 0, code: registryFinding.code, detail: registryFinding.detail }
-      : count.finding;
+      : identity.finding ?? count.finding;
 
-  const valid = chain.valid && keyTrust.findings.length === 0 && count.finding === undefined;
+  const valid = chain.valid && keyTrust.findings.length === 0 && count.finding === undefined && identity.finding === undefined;
   return {
     valid,
     totalEntries: chain.totalEntries,
@@ -547,9 +599,9 @@ export function verifyAuditExport(
       detail: r.failure?.detail,
       signature: r.signature,
     })),
-    recordId: meta.recordId,
+    recordId: identity.recordId,
     signatureCoverage: chain.signatureCoverage,
-    optionalChecks: chain.optionalChecks,
+    optionalChecks: { ...chain.optionalChecks, entry_count: count.applied ? 'applied' : 'skipped_no_input' },
     keyProvenance: chain.keyProvenance,
     unsignedProjectionFields: exportData.verificationGuide?.unsignedFields ?? [],
     agentSignatures: chain.agentSignatures,
@@ -565,14 +617,15 @@ export function verifyAuditExport(
  * Hold the chain's length to the counts the export states. A chain that was
  * cut from the end still links and verifies entry by entry, so its length is
  * the only thing that shows the cut: against the latest checkpoint position
- * (Server `audit_vault_row_missing_for_checkpoint`) and against the number of
+ * (a chain shorter than its checkpoint lost rows below it) and against the number of
  * entries the Server wrote. A count that is present and is not a non-negative
  * integer is refused rather than skipped.
  */
 function statedEntryCount(
   meta: RecordAuditExportInput['exportMetadata'],
   held: number,
-): { entryCount: VerifyExportResult['entryCount']; finding?: NonNullable<VerifyExportResult['brokenAt']> } {
+  supplied?: number,
+): { entryCount: VerifyExportResult['entryCount']; applied: boolean; finding?: NonNullable<VerifyExportResult['brokenAt']> } {
   const read = (name: 'expectedEntries' | 'totalEntries'): number | null | 'malformed' => {
     const value: unknown = meta[name];
     if (value === undefined || value === null) return null;
@@ -588,13 +641,26 @@ function statedEntryCount(
     if (value === 'malformed') {
       return {
         entryCount,
+        applied: true,
         finding: { position: 0, code: 'UNSUPPORTED_FORMAT', detail: `exportMetadata.${name} is ${JSON.stringify(meta[name])}, not a non-negative integer or null, so the chain's length cannot be held to it.` },
       };
     }
   }
+  if (supplied !== undefined && held !== supplied) {
+    return {
+      entryCount,
+      applied: true,
+      finding: {
+        position: Math.min(held, supplied) + 1,
+        code: 'CHAIN_POSITION_GAP',
+        detail: `The export carries ${held} ${held === 1 ? 'entry' : 'entries'} and expectedEntryCount, supplied by the caller, is ${supplied}: ${held < supplied ? 'entries were removed from the end' : 'entries were added past the end'} of the chain.`,
+      },
+    };
+  }
   if (entryCount.expectedEntries !== null && held < entryCount.expectedEntries) {
     return {
       entryCount,
+      applied: true,
       finding: {
         position: entryCount.expectedEntries,
         code: 'CHECKPOINT_ROW_MISSING',
@@ -605,6 +671,7 @@ function statedEntryCount(
   if (entryCount.statedEntries !== null && held < entryCount.statedEntries) {
     return {
       entryCount,
+      applied: true,
       finding: {
         position: held + 1,
         code: 'CHAIN_POSITION_GAP',
@@ -612,10 +679,50 @@ function statedEntryCount(
       },
     };
   }
-  return { entryCount };
+  return { entryCount, applied: supplied !== undefined || entryCount.expectedEntries !== null || entryCount.statedEntries !== null };
 }
 
-const EXPORT_OPTIONS = ['publicKeys', 'requireKeyId', 'requireSuppliedKeys', 'trustAnchors', 'distrustedKeys', 'agentKeys', 'federationKeys'] as const satisfies ReadonlyArray<keyof VerifyExportOptions>;
+/**
+ * The record id the export is about, taken from what it signs. The id in
+ * `exportMetadata` is unsigned, so it is held to the id each entry's signed
+ * predicate names and to the entry's own `recordId` column: any disagreement,
+ * among the entries or with the metadata, fails CHAIN_PAYLOAD_BINDING_MISMATCH,
+ * and the id reported is the signed one, never the metadata's.
+ */
+function signedRecordId(
+  stated: unknown,
+  entries: ReadonlyArray<unknown>,
+): { recordId: string; finding?: NonNullable<VerifyExportResult['brokenAt']> } {
+  const seen: Array<{ id: string; position: number; source: string }> = [];
+  entries.forEach((raw, i) => {
+    if (!isRecord(raw)) return;
+    const position = typeof raw.chainPosition === 'number' ? raw.chainPosition : typeof raw.position === 'number' ? raw.position : i + 1;
+    if (typeof raw.recordId === 'string') seen.push({ id: raw.recordId, position, source: 'its recordId column' });
+    const integrity = raw.integrity;
+    if (!isRecord(integrity) || typeof integrity.coseSign1 !== 'string') return;
+    const parts = decodeCoseSign1(Buffer.from(integrity.coseSign1, 'base64'));
+    const signed = parts === null ? null : decodePredicate(parts.payloadBstr)?.['record_id'];
+    if (typeof signed === 'string') seen.push({ id: signed, position, source: 'its signed predicate' });
+  });
+  const statedId = typeof stated === 'string' ? stated : '';
+  const first = seen.find((s) => s.source === 'its signed predicate') ?? seen[0];
+  if (first === undefined) return { recordId: statedId };
+  const same = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
+  const other = seen.find((s) => !same(s.id, first.id));
+  if (other === undefined && same(statedId, first.id)) return { recordId: first.id };
+  return {
+    recordId: first.id,
+    finding: {
+      position: (other ?? first).position,
+      code: 'CHAIN_PAYLOAD_BINDING_MISMATCH',
+      detail: other !== undefined
+        ? `The entries of this export name different records: ${first.id} (${first.source}) and ${other.id} (${other.source}).`
+        : `The entries of this export are about record ${first.id} (${first.source}) and exportMetadata.recordId says ${JSON.stringify(stated)}: the unsigned metadata was edited.`,
+    },
+  };
+}
+
+const EXPORT_OPTIONS = ['publicKeys', 'requireKeyId', 'requireSuppliedKeys', 'trustAnchors', 'distrustedKeys', 'agentKeys', 'federationKeys', 'allowAfterRetirement', 'expectedEntryCount'] as const satisfies ReadonlyArray<keyof VerifyExportOptions>;
 
 function isKeysEnvelope(value: VerifyExportOptions['publicKeys']): value is { data: ReadonlyArray<SuppliedKeyEntry> } {
   return isRecord(value) && Array.isArray(value.data);
@@ -696,6 +803,7 @@ function earlyFailure(recordId: string, totalEntries: number, detail: string): V
       key_anchoring: 'skipped_no_input',
       federation_wire: 'skipped_no_input',
       evidence_binding: 'skipped_no_input',
+      entry_count: 'skipped_no_input',
     },
     keyProvenance: { supplied: 0, embedded: 0 },
     unsignedProjectionFields: [],

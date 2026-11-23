@@ -212,6 +212,13 @@ export interface NormalizedEntry {
      */
     extensionsProjected?: boolean;
   };
+  /**
+   * Set on an entry that lacks the `binding` inputs where the walk needs them
+   * (a sibling carries them, or the caller supplied federation keys), with
+   * what is missing. The entry then fails CHAIN_PAYLOAD_BINDING_MISMATCH
+   * rather than reading as an entry with nothing to check.
+   */
+  bindingRequired?: { detail: string; federationWire: boolean };
   /** Inputs for the OIDC-actor cross-check (dump path). */
   oidcActor?: {
     iss: string | null;
@@ -439,6 +446,14 @@ export interface VerifyChainOptions {
    */
   federationKeys?: FederationKeyRegistry;
   /**
+   * Accept a sealed federation message signed by a key its sender's history
+   * had retired before the message was signed (beyond the clock-skew
+   * allowance), counting it in `federationWire.afterRetirement`. For the short
+   * gap while a publisher restarts onto its new key. Without it such a
+   * message fails CHAIN_FEDERATION_WIRE_INVALID.
+   */
+  allowAfterRetirement?: boolean;
+  /**
    * The instant this install began signing: the earliest `activatedAt` across
    * its whole signing key set, retired keys included. An entry with a null
    * `signingKeyId` whose `createdAt` is at or after it fails
@@ -532,7 +547,7 @@ export function verifyChain(
   keys: KeyRegistry,
   options: VerifyChainOptions = {},
 ): ChainResult {
-  assertKnownOptions('verifyChain', options, ['requireKeyId', 'requireSuppliedKeys', 'agentKeys', 'federationKeys', 'signingSince'] satisfies ReadonlyArray<keyof VerifyChainOptions>);
+  assertKnownOptions('verifyChain', options, ['requireKeyId', 'requireSuppliedKeys', 'agentKeys', 'federationKeys', 'allowAfterRetirement', 'signingSince'] satisfies ReadonlyArray<keyof VerifyChainOptions>);
   const scopeId = entries[0]?.scopeId ?? '(empty)';
   const sorted = entries
     .map((entry, at) => ({ entry, at, key: positionKey(entry.chainPosition) }))
@@ -588,6 +603,7 @@ export function verifyChain(
   }
   const mustSign: MustSign = { signedBefore: false, signingSince };
 
+  const unbound = { payload: false, federation: false };
   let previousHash: string | null = null;
   for (let i = 0; i < sorted.length; i++) {
     const entry = sorted[i];
@@ -607,8 +623,13 @@ export function verifyChain(
     if (result.valid && result.accounted === undefined) {
       result = checkAgentSignature(entry, result, options.agentKeys, optionalChecks, agentSignatures);
     }
+    if (result.valid && result.accounted === undefined && entry.binding === undefined && entry.bindingRequired !== undefined) {
+      unbound.payload = true;
+      if (entry.bindingRequired.federationWire) unbound.federation = true;
+      result = failAfterSignature(entry, result, 'CHAIN_PAYLOAD_BINDING_MISMATCH', entry.bindingRequired.detail);
+    }
     if (result.valid && result.accounted === undefined && entry.binding !== undefined) {
-      result = checkSealedFederationWire(entry, result, options.federationKeys, optionalChecks, federationWire);
+      result = checkSealedFederationWire(entry, result, options.federationKeys, optionalChecks, federationWire, options.allowAfterRetirement === true);
     }
     if (result.valid && result.accounted === undefined && entry.inlinedEvidence !== undefined) {
       result = checkInlinedEvidence(entry, entry.inlinedEvidence.value, result, optionalChecks, evidenceBinding);
@@ -650,6 +671,10 @@ export function verifyChain(
 
     previousHash = entry.payloadHash;
   }
+
+  // A check some entry could not take part in is not a check that ran.
+  if (unbound.payload) optionalChecks.payload_binding = 'not_checked';
+  if (unbound.federation) optionalChecks.federation_wire = 'not_checked';
 
   // The caller walked the key statements (every key carries a verdict), but no
   // entry got as far as the anchoring check.
@@ -741,6 +766,7 @@ function checkSealedFederationWire(
   federationKeys: FederationKeyRegistry | undefined,
   optionalChecks: Record<OptionalCheck, CheckApplicability>,
   counts: { present: number; verified: number; failed: number; afterRetirement: number },
+  allowAfterRetirement: boolean,
 ): ChainEntryResult {
   if (entry.binding === undefined) return result;
   const wire = extractFederationWire(entry.binding.payload);
@@ -755,7 +781,7 @@ function checkSealedFederationWire(
     );
   }
   counts.present++;
-  const outcome = checkFederationWire(entry.binding.entryType, entry.binding.recordId, entry.binding.payload, wire, federationKeys);
+  const outcome = checkFederationWire(entry.binding.entryType, entry.binding.recordId, entry.binding.payload, wire, federationKeys, { allowAfterRetirement });
   if (outcome.outcome === 'ok') {
     if (outcome.signatureChecked) counts.verified++;
     if (outcome.afterRetirement) counts.afterRetirement++;

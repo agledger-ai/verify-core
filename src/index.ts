@@ -45,6 +45,7 @@ export type {
   SuppliedKeyEntry,
   EntryVerificationResult,
   VerifyExportResult,
+  ExportOptionalCheck,
 } from './audit-export.js';
 
 export {
@@ -103,6 +104,7 @@ export type {
   FederationTrustedKey,
   FederationWire,
   FederationWireOutcome,
+  CheckFederationWireOptions,
 } from './federation-wire.js';
 export { instantMs } from './instant.js';
 export { assertKnownOptions } from './options.js';
