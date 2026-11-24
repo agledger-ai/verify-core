@@ -259,11 +259,9 @@ describe('published tarball carries no dangling source-map references', () => {
   });
 });
 
-describe('no tracker references', () => {
-  // These packages are public; the trackers they used to cite are not. A
-  // private issue number in a shipped docstring is a dead link for every
-  // consumer who reads it, and `dist/*.d.ts` puts it in their editor. Say
-  // what the behaviour is rather than where it was decided.
+describe('no issue references', () => {
+  // An issue number in a shipped docstring means nothing to a reader of
+  // `dist/*.d.ts`. Say what the behaviour is rather than where it was decided.
   const TRACKER_REF =
     /\b[a-z][a-z-]*#\d+|(?<![\w/])#\d{2,4}\b|\bF-\d{3}\b|\bCR-\d+\b/;
 

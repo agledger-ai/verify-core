@@ -15,32 +15,27 @@
  * Every code carries an actionable next step (`suggestion`) so a result is a
  * directive, not just a verdict.
  *
- * This is the strict union of the two taxonomies it replaces: the dump
- * verifier's `CHAIN_*`/`CHECKPOINT_*`/`TENANT_*` codes and the export
- * verifier's lower_snake reasons, with no tamper class dropped. Two renames
- * and three additions vs. the old dump set:
- *   - CHAIN_PAYLOAD_DRIFT      -> CHAIN_PAYLOAD_BINDING_MISMATCH (drift read as a
- *                                content/value judgement; this is a binding-
- *                                integrity check: the signed payload's STRUCTURE
- *                                no longer matches the canonical projection of the
- *                                row columns it is bound to. AGLedger never
- *                                inspects deliverable content.)
- *   - CHAIN_SIGNATURE_MISSING_KEY stays for "no key available for this id"; the
+ * Codes whose meaning is easy to misread:
+ *   - CHAIN_PAYLOAD_BINDING_MISMATCH  a binding-integrity check: the signed
+ *                                payload's STRUCTURE no longer matches the
+ *                                canonical projection of the row columns it is
+ *                                bound to.
+ *   - CHAIN_SIGNATURE_MISSING_KEY means "no key available for this id"; the
  *                                caller-policy case (requireKeyId / out-of-band-
  *                                only) splits out to CHAIN_KEY_POLICY_VIOLATION so
  *                                a retired/wrong-key policy hit is alertable apart
  *                                from a benign missing key.
- *   - CHAIN_KEY_EXPIRED (new)  temporal key-validity: entry written after the
+ *   - CHAIN_KEY_EXPIRED        temporal key-validity: entry written after the
  *                                signing key's retired_at, or after its
  *                                distrustedKeys cutoff.
  *   - CHAIN_KEY_NOT_YET_ACTIVE  entry written before the key's activated_at.
  *                                Split from CHAIN_KEY_EXPIRED so a consumer is
  *                                not told "expired" about a key that had not
  *                                started yet.
- *   - CHAIN_EMPTY (new)        a chain/vault with nothing to verify is a non-clean
+ *   - CHAIN_EMPTY              a chain/vault with nothing to verify is a non-clean
  *                                verdict, never a silent pass.
  *
- * Later additions:
+ * Codes that mirror a Server-side check:
  *   - CHAIN_ENTRY_UNSIGNED     Server mirror of `signature_missing`: an entry with
  *                                no signing key id after a signed entry in its
  *                                chain, or written at or after the earliest
